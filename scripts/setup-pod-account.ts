@@ -17,8 +17,13 @@ function parseArgs(argv: string[]): Options {
   const opts: Partial<Options> = { home: defaultHomeDir() };
 
   for (let i = 2; i < argv.length; i++) {
-    const arg = argv[i];
+    const raw = argv[i];
+    const eqIndex = raw.indexOf('=');
+    const arg = eqIndex >= 0 ? raw.slice(0, eqIndex) : raw;
+    const inlineValue = eqIndex >= 0 ? raw.slice(eqIndex + 1) : undefined;
+
     const value = (): string => {
+      if (inlineValue !== undefined) return inlineValue;
       const v = argv[++i];
       if (!v) throw new Error(`Nilai untuk ${arg} tidak boleh kosong`);
       return v;
@@ -44,7 +49,7 @@ function parseArgs(argv: string[]): Options {
         printUsage();
         process.exit(0);
       default:
-        throw new Error(`Argumen tidak dikenal: ${arg}`);
+        throw new Error(buildUnknownArgMessage(raw));
     }
   }
 
@@ -55,8 +60,22 @@ function parseArgs(argv: string[]): Options {
   return opts as Options;
 }
 
+function buildUnknownArgMessage(raw: string): string {
+  if (!raw.startsWith('--')) {
+    return (
+      `Argumen tidak dikenal: ${raw}\n` +
+      'Hint: jika memakai "npm run", sertakan separator "--" sebelum argumen, contoh:\n' +
+      '  npm run setup:pod -- --css http://localhost:3000/ --email <email> --password <pass> --pod <name>\n' +
+      'Alternatif tanpa npm arg-forwarding: npx ts-node scripts/setup-pod-account.ts --css <url> ...'
+    );
+  }
+  return `Argumen tidak dikenal: ${raw} (gunakan --help untuk daftar argumen)`;
+}
+
 function printUsage(): void {
   console.log('Usage: npm run setup:pod -- --css <url> --email <email> --password <password> --pod <pod-name> [--home <dir>]');
+  console.log('       Flag juga menerima bentuk --flag=value, mis. --css=http://localhost:3000/');
+  console.log('       Alternatif tanpa separator: npx ts-node scripts/setup-pod-account.ts --css <url> ...');
   console.log('Contoh: npm run setup:pod -- --css http://localhost:3000/ --email alice@example.com --password p2pod-demo-123 --pod alice --home .p2pod/alice');
 }
 

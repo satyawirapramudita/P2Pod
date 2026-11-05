@@ -35,11 +35,19 @@ Tunggu sampai log masing-masing menunjukkan server siap (CSS: `Listening to serv
 ### 2. Provisioning kredensial Pod (sekali saja)
 
 ```bash
-npm run setup:pod -- --css http://localhost:3000/ --email alice@example.com --password p2pod-demo-123 --pod alice --home .p2pod/alice
-npm run setup:pod -- --css http://localhost:3001/ --email bob@example.com --password p2pod-demo-123 --pod bob --home .p2pod/bob
+npm run setup:pod:alice   # alice → CSS http://localhost:3000/
+npm run setup:pod:bob     # bob   → CSS http://localhost:3001/
 ```
 
 Perintah ini login ke CSS lalu membuat **client credentials** dan menyimpannya di `.p2pod/<user>/pod-config.json`. Jalankan ulang bila file tersebut hilang.
+
+> **Penting (argumen npm)**: bila memakai `npm run setup:pod` manual, sertakan separator `--` sebelum argumen — tanpa itu npm menelan flag seperti `--css` dan script gagal dengan `Argumen tidak dikenal: http://...`:
+> ```bash
+> npm run setup:pod -- --css http://localhost:3000/ --email alice@example.com --password p2pod-demo-123 --pod alice --home .p2pod/alice
+> # atau tanpa npm arg-forwarding:
+> npx ts-node scripts/setup-pod-account.ts --css http://localhost:3000/ --email alice@example.com --password p2pod-demo-123 --pod alice --home .p2pod/alice
+> ```
+> Sintaks `--flag=value` juga didukung (mis. `--css=http://localhost:3000/`).
 
 ### 3. Mulai chat (2 terminal baru)
 
@@ -90,14 +98,14 @@ Mesin A (alice) dan Mesin B (bob) di jaringan yang sama. Discovery Platform bisa
 ```bash
 npm run css:alice
 npm run discovery                     # catat IP LAN Mesin A, misal 192.168.1.10
-npm run setup:pod -- --css http://localhost:3000/ --email alice@example.com --password p2pod-demo-123 --pod alice --home .p2pod/alice
+npm run setup:pod:alice
 npm start -- --home .p2pod/alice --listen --port 5000 --pod http://localhost:3000/alice/ --discovery http://localhost:4000 --name alice
 ```
 
 **Mesin B:**
 ```bash
 npm run css:bob
-npm run setup:pod -- --css http://localhost:3001/ --email bob@example.com --password p2pod-demo-123 --pod bob --home .p2pod/bob
+npm run setup:pod:bob
 npm start -- --home .p2pod/bob --port 5000 --connect <PEER_ID_ALICE> --pod http://localhost:3001/bob/ --discovery http://192.168.1.10:4000 --name bob
 ```
 
@@ -120,6 +128,8 @@ Catatan:
 --home <dir>                direktori identitas & config (default ~/.p2pod, env: P2POD_HOME)
 --name <nama>               display name (disimpan di identity.json)
 ```
+
+Semua flag juga menerima bentuk `--flag=value` (mis. `--port=5001`); `--help` menampilkan bantuan.
 
 ---
 
@@ -237,8 +247,9 @@ Halaman ini untuk mengelola akun: pod, login, dan **client credentials** (sumber
 | Gejala | Solusi |
 |---|---|
 | `Discovery Platform tidak terjangkau` | Pastikan `npm run discovery` berjalan; cek URL `--discovery` |
+| `Argumen tidak dikenal: http://...` saat setup | Flag tertelan npm — pakai `npm run setup:pod:alice` / `setup:pod:bob`, atau sertakan separator `--` sebelum argumen |
 | `Menunggu peer online...` terus muncul | Normal bila target belum dibuka — connector retry tiap 3 dtk; pastikan Peer ID benar (bandingkan fingerprint) |
 | `Peer tidak ditemukan` | Hanya muncul sebagai pesan tunggu; peer dianggap lewat TTL 60 dtk bila heartbeat berhenti |
-| `Konfigurasi Pod tidak ditemukan` | Jalankan `npm run setup:pod` sesuai panduan |
+| `Konfigurasi Pod tidak ditemukan` | Jalankan `npm run setup:pod:alice` / `npm run setup:pod:bob` sesuai panduan |
 | `Login ke Solid Pod gagal` | CSS harus berjalan; jalankan ulang `setup:pod` |
 | Port bentrok (`EADDRINUSE`) | Di satu mesin beri `--port` berbeda tiap peer (alice 5000, bob 5001) atau hentikan proses lama (`taskkill /PID <pid> /T /F`) |

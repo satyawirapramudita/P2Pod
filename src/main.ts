@@ -23,8 +23,13 @@ function parseArgs(argv: string[]): CliOptions {
   };
 
   for (let i = 2; i < argv.length; i++) {
-    const arg = argv[i];
+    const raw = argv[i];
+    const eqIndex = raw.indexOf('=');
+    const arg = eqIndex >= 0 ? raw.slice(0, eqIndex) : raw;
+    const inlineValue = eqIndex >= 0 ? raw.slice(eqIndex + 1) : undefined;
+
     const value = (): string => {
+      if (inlineValue !== undefined) return inlineValue;
       const v = argv[++i];
       if (!v) throw new Error(`Nilai untuk ${arg} tidak boleh kosong`);
       return v;
@@ -32,6 +37,7 @@ function parseArgs(argv: string[]): CliOptions {
 
     switch (arg) {
       case '--listen':
+        if (inlineValue !== undefined) throw new Error('--listen tidak menerima nilai');
         opts.mode = 'listen';
         break;
       case '--connect':
@@ -53,8 +59,18 @@ function parseArgs(argv: string[]): CliOptions {
       case '--name':
         opts.displayName = value();
         break;
+      case '--help':
+        printUsage();
+        process.exit(0);
       default:
-        throw new Error(`Argumen tidak dikenal: ${arg}`);
+        if (!raw.startsWith('--')) {
+          throw new Error(
+            `Argumen tidak dikenal: ${raw}\n` +
+              'Hint: jika memakai "npm start", sertakan separator "--" sebelum argumen, contoh:\n' +
+              '  npm start -- --listen --port 5000 --pod <pod-url>'
+          );
+        }
+        throw new Error(`Argumen tidak dikenal: ${raw} (gunakan --help untuk daftar argumen)`);
     }
   }
 
@@ -71,6 +87,7 @@ function printUsage(): void {
   );
   console.log('  Kedua mode sama-sama online & terdaftar di Discovery Platform — urutan start bebas.');
   console.log('  Di satu mesin, berikan --port berbeda untuk tiap peer (mis. 5000 dan 5001).');
+  console.log('  Flag menerima bentuk --flag=value (mis. --port=5001). Bantuan: --help.');
 }
 
 async function main(): Promise<void> {
