@@ -1,0 +1,20 @@
+{
+  "name": "p2pod-discovery-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "P2Pod Discovery Platform — memetakan Peer ID ke IP:Port (transient, tanpa menyimpan pesan)",
+  "scripts": {
+    "dev": "ts-node src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "express": "^5.3.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.0"
+  }
+}
