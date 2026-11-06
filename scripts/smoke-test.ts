@@ -1,5 +1,6 @@
 // scripts/smoke-test.ts
 // Smoke test end-to-end tanpa Pod:
+//   Fase 0: routing IP Discovery Platform (klaim IP dari loopback vs anti-spoof remote)
 //   Fase 1: flow dasar (listen dulu, lalu connect)
 //   Fase 2: urutan dibalik — connector start lebih dulu, retry sampai listener online
 //   Fase 3: kedua sisi saling --connect (tie-break: hanya satu sesi terbentuk)
@@ -7,6 +8,7 @@
 import { ChildProcessWithoutNullStreams, execFileSync, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import { detectLocalIp, isValidIpv4 } from '../src/discovery/discoveryClient';
 
 const DISCOVERY_PORT = 4100;
 const ALICE_PORT = 5600;
@@ -105,6 +107,44 @@ function sleep(ms: number): Promise<void> {
 
 function cliArgs(extra: string[]): string[] {
   return ['ts-node', 'src/main.ts', '--discovery', `http://localhost:${DISCOVERY_PORT}`, ...extra];
+}
+
+async function phase0(): Promise<void> {
+  console.log('\n=== Fase 0: routing IP Discovery Platform ===\n');
+
+  const base = `http://localhost:${DISCOVERY_PORT}`;
+  const localIp = await detectLocalIp(base);
+  console.log(`  (IP LAN terdeteksi di mesin ini: ${localIp || '(tidak ada)'})`);
+
+  const post = async (url: string, body: unknown): Promise<void> => {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    await res.text();
+    if (!res.ok) throw new Error(`POST ${url} gagal (HTTP ${res.status})`);
+  };
+  const lookup = async (peerId: string): Promise<{ ip: string; port: number }> =>
+    (await (await fetch(`${base}/lookup/${peerId}`)).json()) as { ip: string; port: number };
+
+  // A. Peer co-located (koneksi loopback) — server hanya melihat 127.0.0.1,
+  //    jadi IP LAN yang diklaim klien HARUS dipakai.
+  await post(`${base}/register`, { peerId: 'test-loopback', port: 1234, ip: '10.9.9.9' });
+  const viaLoopback = await lookup('test-loopback');
+  assert(viaLoopback.ip === '10.9.9.9', `loopback: IP klaim klien dipakai (dapat ${viaLoopback.ip})`);
+  await post(`${base}/unregister`, { peerId: 'test-loopback' });
+
+  // B. Peer remote (koneksi dari IP LAN, bukan loopback) — klaim IP diabaikan,
+  //    remoteAddress yang menang (anti-spoof).
+  if (isValidIpv4(localIp)) {
+    await post(`http://${localIp}:${DISCOVERY_PORT}/register`, { peerId: 'test-remote', port: 4321, ip: '10.9.9.9' });
+    const viaRemote = await lookup('test-remote');
+    assert(viaRemote.ip === localIp, `remote: klaim IP diabaikan, remoteAddress menang (dapat ${viaRemote.ip})`);
+    await post(`${base}/unregister`, { peerId: 'test-remote' });
+  } else {
+    console.log('  SKIP  uji remote (mesin ini tidak punya IP LAN)');
+  }
 }
 
 async function phase1(): Promise<string> {
@@ -225,6 +265,8 @@ async function main(): Promise<void> {
     env: { PORT: String(DISCOVERY_PORT) },
   });
   await waitFor(discovery, new RegExp(`listening on 0\\.0\\.0\\.0:${DISCOVERY_PORT}`));
+
+  await phase0();
 
   const alicePeerId = await phase1();
   const bobPeerId = readPeerId('.p2pod/test-bob');

@@ -97,23 +97,32 @@ Mesin A (alice) dan Mesin B (bob) di jaringan yang sama. Discovery Platform bisa
 **Mesin A:**
 ```bash
 npm run css:alice
-npm run discovery                     # catat IP LAN Mesin A, misal 192.168.1.10
+ipconfig                              # CATAT IPv4 Mesin A (Wi-Fi/hotspot) — jangan pakai IP contoh!
+npm run discovery
 npm run setup:pod:alice
 npm start -- --home .p2pod/alice --listen --port 5000 --pod http://localhost:3000/alice/ --discovery http://localhost:4000 --name alice
 ```
+
+> Mesin A boleh tetap memakai `--discovery http://localhost:4000` — klien otomatis melaporkan IP LAN-nya ke Discovery Platform, sehingga Mesin B tetap bisa menjangkau.
 
 **Mesin B:**
 ```bash
 npm run css:bob
 npm run setup:pod:bob
-npm start -- --home .p2pod/bob --port 5000 --connect <PEER_ID_ALICE> --pod http://localhost:3001/bob/ --discovery http://192.168.1.10:4000 --name bob
+npm start -- --home .p2pod/bob --port 5000 --connect <PEER_ID_ALICE> --pod http://localhost:3001/bob/ --discovery http://<IP_ALICE>:4000 --name bob
+```
+
+**Firewall (wajib di Mesin A)** — buka inbound TCP 4000 (discovery) & 5000 (P2P). Jalankan di PowerShell **as Administrator**:
+```powershell
+New-NetFirewallRule -DisplayName "P2Pod Discovery 4000" -Direction Inbound -Protocol TCP -LocalPort 4000 -Action Allow
+New-NetFirewallRule -DisplayName "P2Pod P2P 5000" -Direction Inbound -Protocol TCP -LocalPort 5000 -Action Allow
 ```
 
 Catatan:
 - **Urutan start bebas** — jalankan kedua perintah dengan urutan apa pun; sisi `--connect` akan retry tiap 3 detik sampai target online.
 - Peran dapat ditukar: Mesin A boleh `--connect` dan Mesin B `--listen`.
 - Pod selalu di `localhost` masing-masing device — hanya pemilik yang menulis ke Pod-nya sendiri.
-- Izinkan port 4000 (discovery) dan 5000 (P2P) di firewall Mesin A.
+- Kedua mesin harus berada di jaringan/hotspot yang sama (bandingkan SSID dan subnet `ipconfig` di kedua mesin).
 
 ---
 
@@ -233,7 +242,7 @@ Halaman ini untuk mengelola akun: pod, login, dan **client credentials** (sumber
 | Verifikasi identitas | Kedua peer menandatangani transcript sesi; MITM terdeteksi |
 | Enkripsi pesan | AES-256-GCM (K_sym hasil derivasi K_temp + transcript) |
 | Penyimpanan | End-of-session write ke Pod masing-masing (bukan per pesan) |
-| Discovery | Hanya mapping Peer ID → IP:Port + target intent (routing), TTL 60 detik, tidak menyimpan konten |
+| Discovery | Hanya mapping Peer ID → IP:Port + target intent (routing); IP diambil dari koneksi — klaim klien hanya dipercaya dari loopback; TTL 60 dtk; tanpa konten |
 
 ## Batasan (by design)
 
@@ -247,6 +256,8 @@ Halaman ini untuk mengelola akun: pod, login, dan **client credentials** (sumber
 | Gejala | Solusi |
 |---|---|
 | `Discovery Platform tidak terjangkau` | Pastikan `npm run discovery` berjalan; cek URL `--discovery` |
+| `Discovery Platform tidak terjangkau ... timeout` (demo 2 mesin) | Cek IP LAN Mesin A dengan `ipconfig` (IP `192.168.1.10` di dokumen hanya ilustrasi). Dari Mesin B: `ping <IP_ALICE>` lalu `Test-NetConnection <IP_ALICE> -Port 4000`. Ping gagal → beda jaringan/hotspot (atau AP-isolation di router); ping OK tapi port gagal → buka firewall Mesin A (lihat Skenario B) |
+| `Koneksi dari peer tak dikenal` berulang dengan fingerprint milik peer sendiri | Gejala versi lama: peer co-located terdaftar sebagai `127.0.0.1`. Update ke versi terbaru (IP LAN dideteksi otomatis), atau sementara jalankan Mesin A dengan `--discovery http://<IP_ALICE>:4000` |
 | `Argumen tidak dikenal: http://...` saat setup | Flag tertelan npm — pakai `npm run setup:pod:alice` / `setup:pod:bob`, atau sertakan separator `--` sebelum argumen |
 | `Could not build the config files ... Invalid term IRI: file://...` (CSS crash) | Path project mengandung spasi. Jalankan `npm run patch:css` (otomatis saat `npm install`) lalu ulangi. Alternatif: pindahkan project ke path tanpa spasi, mis. `C:\P2Pod` |
 | `Menunggu peer online...` terus muncul | Normal bila target belum dibuka — connector retry tiap 3 dtk; pastikan Peer ID benar (bandingkan fingerprint) |

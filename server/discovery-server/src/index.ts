@@ -26,15 +26,22 @@ function normalizeIp(ip: string | undefined): string {
   return ip;
 }
 
+function isPlausibleIpv4(value: string): boolean {
+  const parts = value.split('.');
+  if (parts.length !== 4) return false;
+  return parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255);
+}
+
 function short(peerId: string): string {
   return `${peerId.slice(0, 10)}...`;
 }
 
 app.post('/register', (req, res) => {
-  const { peerId, port, targetPeerId } = (req.body ?? {}) as {
+  const { peerId, port, targetPeerId, ip: claimedIpRaw } = (req.body ?? {}) as {
     peerId?: unknown;
     port?: unknown;
     targetPeerId?: unknown;
+    ip?: unknown;
   };
   const portNum = Number(port);
 
@@ -50,11 +57,24 @@ app.post('/register', (req, res) => {
     res.status(400).json({ error: 'targetPeerId harus string bila diisi' });
     return;
   }
+  if (claimedIpRaw !== undefined && claimedIpRaw !== null && typeof claimedIpRaw !== 'string') {
+    res.status(400).json({ error: 'ip harus string bila diisi' });
+    return;
+  }
+
+  const remoteIp = normalizeIp(req.socket.remoteAddress);
+  const claimedIp = typeof claimedIpRaw === 'string' && isPlausibleIpv4(claimedIpRaw) ? claimedIpRaw : undefined;
+  // Peer yang co-located dengan discovery server (mendaftar via localhost) hanya terlihat
+  // sebagai loopback — khusus kasus itu, percayai IP LAN yang diklaim klien; jika tidak,
+  // peer di mesin lain akan diarahkan ke 127.0.0.1 miliknya sendiri.
+  // Koneksi remote selalu memakai remoteAddress sehingga IP tidak bisa dipalsukan.
+  const useClaimed = (remoteIp === '127.0.0.1' || remoteIp === 'unknown') && claimedIp !== undefined;
+  const effectiveIp = useClaimed && claimedIp ? claimedIp : remoteIp;
 
   const target = typeof targetPeerId === 'string' && targetPeerId.length > 0 ? targetPeerId : undefined;
   const record: PeerRecord = {
     peerId,
-    ip: normalizeIp(req.socket.remoteAddress),
+    ip: effectiveIp,
     port: portNum,
     lastSeen: Date.now(),
     targetPeerId: target,
@@ -62,6 +82,7 @@ app.post('/register', (req, res) => {
   peers.set(peerId, record);
   console.log(
     `[discovery] register ${short(peerId)} -> ${record.ip}:${record.port}` +
+      `${useClaimed ? ' (loopback→klaim klien)' : ''}` +
       `${target ? ` (target: ${short(target)})` : ''} (peer aktif: ${peers.size})`
   );
   res.json({ ok: true, ip: record.ip, port: record.port });
