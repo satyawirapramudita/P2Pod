@@ -14,7 +14,7 @@ P2Pod adalah chat P2P terdesentralisasi: komunikasi real-time via TCP langsung (
 npm install
 ```
 
-> `postinstall` otomatis menginstall dependency untuk `server/discovery-server`.
+> `postinstall` otomatis menginstall dependency untuk `server/discovery-server` **dan** mem-patch `componentsjs` (dipakai CSS) agar pod server bisa berjalan dari folder yang mengandung spasi, mis. `C:\Users\Nama Lengkap\Desktop\P2Pod`. Patch manual: `npm run patch:css`.
 
 ---
 
@@ -248,6 +248,7 @@ Halaman ini untuk mengelola akun: pod, login, dan **client credentials** (sumber
 |---|---|
 | `Discovery Platform tidak terjangkau` | Pastikan `npm run discovery` berjalan; cek URL `--discovery` |
 | `Argumen tidak dikenal: http://...` saat setup | Flag tertelan npm — pakai `npm run setup:pod:alice` / `setup:pod:bob`, atau sertakan separator `--` sebelum argumen |
+| `Could not build the config files ... Invalid term IRI: file://...` (CSS crash) | Path project mengandung spasi. Jalankan `npm run patch:css` (otomatis saat `npm install`) lalu ulangi. Alternatif: pindahkan project ke path tanpa spasi, mis. `C:\P2Pod` |
 | `Menunggu peer online...` terus muncul | Normal bila target belum dibuka — connector retry tiap 3 dtk; pastikan Peer ID benar (bandingkan fingerprint) |
 | `Peer tidak ditemukan` | Hanya muncul sebagai pesan tunggu; peer dianggap lewat TTL 60 dtk bila heartbeat berhenti |
 | `Konfigurasi Pod tidak ditemukan` | Jalankan `npm run setup:pod:alice` / `npm run setup:pod:bob` sesuai panduan |

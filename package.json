@@ -7,7 +7,8 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "postinstall": "npm --prefix server/discovery-server install",
+    "postinstall": "node scripts/patch-componentsjs.js && npm --prefix server/discovery-server install",
+    "patch:css": "node scripts/patch-componentsjs.js",
     "start": "ts-node src/main.ts",
     "discovery": "npm --prefix server/discovery-server run dev",
     "css:alice": "community-solid-server -c @css:config/file.json -f .css/alice -p 3000 -b http://localhost:3000/ --seedConfig css/seed-alice.json",
