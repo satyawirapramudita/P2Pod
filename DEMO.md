@@ -2,6 +2,8 @@
 
 P2Pod adalah chat P2P terdesentralisasi: komunikasi real-time via TCP langsung (ECDH + AES-256-GCM), identitas permanen Ed25519, dan riwayat percakapan tersimpan di Solid Pod masing-masing pengguna (Community Solid Server lokal).
 
+> **Jalur cepat modular**: `npm run role:discovery` (jadi host Discovery Platform) dan `npm run role:user` (wizard init + daftar user + `/connect` via nama). Lihat [README.md](README.md). Dokumen ini fokus ke skenario demo detail alice/bob.
+
 ## Prasyarat
 
 - Node.js 18+ (diuji di Node 24)
@@ -263,5 +265,6 @@ Halaman ini untuk mengelola akun: pod, login, dan **client credentials** (sumber
 | `Menunggu peer online...` terus muncul | Normal bila target belum dibuka — connector retry tiap 3 dtk; pastikan Peer ID benar (bandingkan fingerprint) |
 | `Peer tidak ditemukan` | Hanya muncul sebagai pesan tunggu; peer dianggap lewat TTL 60 dtk bila heartbeat berhenti |
 | `Konfigurasi Pod tidak ditemukan` | Jalankan `npm run setup:pod:alice` / `npm run setup:pod:bob` sesuai panduan |
+| ⚠ `Solid Pod tidak terjangkau` saat start | CSS Pod tidak jalan — jalankan `npm run css:alice`/`css:bob` (atau biarkan wizard user menyalakannya), lalu restart aplikasi. Chat tetap bisa tanpa Pod, tetapi history tidak disimpan |
 | `Login ke Solid Pod gagal` | CSS harus berjalan; jalankan ulang `setup:pod` |
 | Port bentrok (`EADDRINUSE`) | Di satu mesin beri `--port` berbeda tiap peer (alice 5000, bob 5001) atau hentikan proses lama (`taskkill /PID <pid> /T /F`) |
