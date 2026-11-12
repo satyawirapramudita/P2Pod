@@ -1,0 +1,11 @@
+{
+  "name": "@p2pod/user-client",
+  "version": "0.2.0",
+  "private": true,
+  "description": "P2Pod User Client — CLI chat P2P terenkripsi dengan penyimpanan Solid Pod opsional",
+  "dependencies": {
+    "@inrupt/solid-client": "^4.0.0",
+    "@inrupt/solid-client-authn-node": "^5.0.3",
+    "@p2pod/shared": "*"
+  }
+}

@@ -144,7 +144,7 @@ async function runSession(round: number): Promise<void> {
   console.log(`\n=== Sesi #${round} ===`);
 
   const alice = start(`alice${round}`, 'npx', [
-    'ts-node', 'src/main.ts',
+    'ts-node', 'packages/user-client/src/main.ts',
     '--home', ALICE_HOME,
     '--listen', '--port', String(ALICE_TCP_PORT),
     '--pod', ALICE_POD,
@@ -155,7 +155,7 @@ async function runSession(round: number): Promise<void> {
   await waitFor(alice, /Terdaftar di Discovery Platform/);
 
   const bob = start(`bob${round}`, 'npx', [
-    'ts-node', 'src/main.ts',
+    'ts-node', 'packages/user-client/src/main.ts',
     '--home', BOB_HOME,
     '--port', String(BOB_TCP_PORT),
     '--connect', peerIdMatch[1],
@@ -210,7 +210,7 @@ async function main(): Promise<void> {
   await provision('alice', ALICE_CSS, 'alice@example.com', ALICE_HOME);
   await provision('bob', BOB_CSS, 'bob@example.com', BOB_HOME);
 
-  const discovery = start('discovery', 'npm', ['--prefix', 'server/discovery-server', 'run', 'dev'], false, {
+  const discovery = start('discovery', 'npm', ['run', 'role:discovery'], false, {
     PORT: String(DISCOVERY_PORT),
   });
   const startedAt = Date.now();

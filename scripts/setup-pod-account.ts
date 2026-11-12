@@ -3,7 +3,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { defaultHomeDir, ensureDir } from '../src/identity/identity';
+import { defaultHomeDir, ensureDir } from '../packages/user-client/src/identity/identity';
 
 interface Options {
   css: string;

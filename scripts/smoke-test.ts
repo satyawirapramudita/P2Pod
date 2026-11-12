@@ -8,7 +8,7 @@
 import { ChildProcessWithoutNullStreams, execFileSync, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { detectLocalIp, isValidIpv4 } from '../src/discovery/discoveryClient';
+import { detectLocalIp, isValidIpv4 } from '../packages/user-client/src/discovery/discoveryClient';
 
 const DISCOVERY_PORT = 4100;
 const ALICE_PORT = 5600;
@@ -106,7 +106,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 function cliArgs(extra: string[]): string[] {
-  return ['ts-node', 'src/main.ts', '--discovery', `http://localhost:${DISCOVERY_PORT}`, ...extra];
+  return ['ts-node', 'packages/user-client/src/main.ts', '--discovery', `http://localhost:${DISCOVERY_PORT}`, ...extra];
 }
 
 async function phase0(): Promise<void> {
@@ -261,7 +261,7 @@ async function main(): Promise<void> {
   console.log('--- Smoke test P2Pod (tanpa Pod) ---');
   const t0 = Date.now();
 
-  const discovery = start('discovery', 'npm', ['--prefix', 'server/discovery-server', 'run', 'dev'], {
+  const discovery = start('discovery', 'npm', ['run', 'role:discovery'], {
     env: { PORT: String(DISCOVERY_PORT) },
   });
   await waitFor(discovery, new RegExp(`listening on 0\\.0\\.0\\.0:${DISCOVERY_PORT}`));

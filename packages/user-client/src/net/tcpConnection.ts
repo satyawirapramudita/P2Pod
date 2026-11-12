@@ -2,7 +2,7 @@
 
 import * as net from 'net';
 import { EventEmitter } from 'events';
-import { AnyMessage } from '../types/messages';
+import type { AnyMessage } from '@p2pod/shared';
 import { MessageFramer } from './messageFramer';
 
 export class ManagedConnection extends EventEmitter {

@@ -4,8 +4,8 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { defaultHomeDir } from '../src/identity/identity';
-import { SolidClient } from '../src/pod/solidClient';
+import { defaultHomeDir } from '../packages/user-client/src/identity/identity';
+import { SolidClient } from '../packages/user-client/src/modules/pod/solidClient';
 
 interface Options {
   home: string;

@@ -1,0 +1,17 @@
+{
+  "name": "@p2pod/discovery-platform",
+  "version": "0.2.0",
+  "private": true,
+  "description": "P2Pod Discovery Platform — memetakan Peer ID ke IP:Port (transient, tanpa menyimpan pesan)",
+  "dependencies": {
+    "@p2pod/shared": "*",
+    "express": "^5.3.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6"
+  },
+  "scripts": {
+    "dev": "ts-node src/index.ts",
+    "build": "tsc -p tsconfig.json"
+  }
+}

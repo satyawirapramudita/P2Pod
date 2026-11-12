@@ -1,4 +1,5 @@
-// src/types/messages.ts
+// packages/shared/src/protocol.ts
+// Protokol pesan P2Pod — dipakai bersama oleh user-client & (kontrak) discovery-platform.
 
 export type MessageType = 'handshake' | 'identity-proof' | 'chat';
 

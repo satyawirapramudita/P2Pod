@@ -1,7 +1,7 @@
 // src/crypto/cryptoEngine.ts
 
 import * as crypto from 'crypto';
-import { ChatMessage, IdentityProofMessage } from '../types/messages';
+import type { ChatMessage, IdentityProofMessage } from '@p2pod/shared';
 
 const PROOF_LABEL = 'p2pod-identity-proof-v1';
 const SESSION_KEY_LABEL = 'p2pod-session-key-v1';

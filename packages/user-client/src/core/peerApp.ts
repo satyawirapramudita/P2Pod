@@ -3,10 +3,10 @@
 import { TcpConnectionManager, ManagedConnection } from '../net/tcpConnection';
 import { CryptoEngine } from '../crypto/cryptoEngine';
 import { TerminalUI } from '../ui/terminalUI';
-import { AnyMessage, HandshakeMessage, IdentityProofMessage, ChatMessage } from '../types/messages';
+import type { AnyMessage, HandshakeMessage, IdentityProofMessage, ChatMessage } from '@p2pod/shared';
 import { Identity, fingerprintOf, verifyWithPeerId } from '../identity/identity';
 import { DiscoveryClient } from '../discovery/discoveryClient';
-import { ChatSessionMeta, HistoryEntry, SolidClient } from '../pod/solidClient';
+import { ChatSessionMeta, HistoryEntry, SolidClient } from '../modules/pod/solidClient';
 
 export interface PeerAppOptions {
   identity: Identity;

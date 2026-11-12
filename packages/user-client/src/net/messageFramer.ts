@@ -1,6 +1,6 @@
 // src/net/messageFramer.ts
 
-import { AnyMessage } from '../types/messages';
+import type { AnyMessage } from '@p2pod/shared';
 import { EventEmitter } from 'events';
 
 export class MessageFramer extends EventEmitter {

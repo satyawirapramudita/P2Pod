@@ -2,13 +2,7 @@
 
 import * as dgram from 'dgram';
 import * as os from 'os';
-
-export interface PeerEndpoint {
-  peerId: string;
-  ip: string;
-  port: number;
-  targetPeerId?: string;
-}
+import type { PeerEndpoint } from '@p2pod/shared';
 
 export function isValidIpv4(ip: string): boolean {
   const parts = ip.split('.');

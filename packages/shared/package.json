@@ -1,0 +1,11 @@
+{
+  "name": "@p2pod/shared",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Kontrak bersama P2Pod — tipe protokol pesan & API Discovery Platform",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  }
+}
