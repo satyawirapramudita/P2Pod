@@ -2,7 +2,7 @@
 
 P2Pod adalah chat P2P terdesentralisasi: komunikasi real-time via TCP langsung (ECDH + AES-256-GCM), identitas permanen Ed25519, dan riwayat percakapan tersimpan di Solid Pod masing-masing pengguna (Community Solid Server lokal).
 
-> **Jalur cepat modular**: `npm run role:discovery` (jadi host Discovery Platform) dan `npm run role:user` (wizard init + daftar user + `/connect` via nama). Lihat [README.md](README.md). Dokumen ini fokus ke skenario demo detail alice/bob.
+> **Jalur cepat modular**: `npm run role:discovery` (jadi host Discovery Platform), `npm run role:user` (wizard init + Pod lokal otomatis + daftar user + `/connect` via nama), `npm run user:list` / `npm run user:connect -- <nama|PeerID>` (satu-jalan), `npm run pod:stop` (hentikan Pod lokal). Lihat [README.md](README.md). Dokumen ini fokus ke skenario demo detail alice/bob.
 
 ## Prasyarat
 
@@ -16,7 +16,7 @@ P2Pod adalah chat P2P terdesentralisasi: komunikasi real-time via TCP langsung (
 npm install
 ```
 
-> `postinstall` otomatis menginstall dependency untuk `server/discovery-server` **dan** mem-patch `componentsjs` (dipakai CSS) agar pod server bisa berjalan dari folder yang mengandung spasi, mis. `C:\Users\Nama Lengkap\Desktop\P2Pod`. Patch manual: `npm run patch:css`.
+> `postinstall` otomatis: (1) mem-patch `componentsjs` (dipakai CSS) agar pod server bisa berjalan dari folder yang mengandung spasi — mis. `C:\Users\Nama Lengkap\Desktop\P2Pod` (patch manual: `npm run patch:css`), dan (2) membangun paket `shared`. Dependency semua paket `packages/*` di-install otomatis lewat **npm workspaces**.
 
 ---
 
@@ -82,6 +82,8 @@ npm run alice:connect -- <PEER_ID_BOB>  # T4: alice yang menghubungi bob
 
 Jika kedua sisi saling `--connect` ke satu sama lain, tie-break otomatis: peer dengan **Peer ID lebih besar** yang menginisiasi, yang lain menunggu. Hasilnya tetap **satu sesi**.
 
+> **Tip (tanpa salin Peer ID)**: di prompt siapa pun yang sudah listening, ketik `/list` untuk melihat user online, lalu `/connect <nama>` (mis. `/connect bob`). Peer yang connect lebih dulu menjadi connector. Perintah satu-jalan juga menerima nama: `npm run bob -- alice`.
+
 ### 4. Akhiri sesi & lihat persistensi
 
 Ketik `/quit` di salah satu terminal. Keduanya akan:
@@ -130,30 +132,55 @@ Catatan:
 
 ## Opsi CLI
 
+**Perintah positional** (argumen pertama):
+
 ```
---listen                    online: dengarkan koneksi + daftar discovery, tunggu koneksi masuk
---connect <PeerID>          online: daftar discovery + hubungi target (retry berkala sampai online) — urutan start bebas
+init                        wizard setup user (nama, discovery, port, pod) → simpan config, lalu listening
+listen                      dengarkan koneksi + daftar discovery, tunggu koneksi masuk
+connect <nama|PeerID>       daftar discovery + hubungi target (retry berkala) — urutan start bebas
+list                        tampilkan user yang sedang online (one-shot, tanpa masuk mode chat)
+```
+
+**Flag umum:**
+
+```
 --port <n>                  port TCP sendiri (default 5000; di satu mesin setiap peer perlu port berbeda, mis. 5000 & 5001)
---pod <pod-url>             URL Pod, misal http://localhost:3000/alice/
+--pod <pod-url>             URL Pod, misal http://localhost:3000/alice/ (mengaktifkan penyimpanan history)
+--no-pod                    nonaktifkan Pod (chat tetap jalan, history tidak disimpan)
 --discovery <url>           URL Discovery Platform (default http://localhost:4000)
 --home <dir>                direktori identitas & config (default ~/.p2pod, env: P2POD_HOME)
 --name <nama>               display name (disimpan di identity.json)
+--peer-ip <ip>              koneksi TCP langsung ke IP target tanpa lookup Discovery (dipakai bersama connect)
+--peer-port <n>             port target untuk koneksi langsung (default 5000)
+--reconfigure               paksa wizard menanyakan ulang nilai saat init
 ```
 
-Semua flag juga menerima bentuk `--flag=value` (mis. `--port=5001`); `--help` menampilkan bantuan.
+**Perintah runtime** (diketik di prompt aplikasi yang sudah listening):
+
+```
+/connect <nama|PeerID>      hubungi user (nama dari /list)
+/connect <IP> <PeerID>      hubungi langsung tanpa Discovery (TCP langsung)
+/list                       tampilkan user online
+/help                       bantuan
+/quit                       akhiri sesi & simpan history (jika Pod aktif)
+```
+
+Semua flag juga menerima bentuk `--flag=value` (mis. `--port=5001`); `--help` menampilkan bantuan. Untuk jalur modular lengkap (host Discovery + wizard user + `user:list` + `user:connect` + `pod:stop`), lihat [README.md](README.md).
 
 ---
 
 ## Testing
 
 ```bash
-npm run test:smoke      # tanpa Pod: flow dasar + retry urutan-bebas + tie-break mutual-connect
+npm run test:smoke      # 5 fase tanpa Pod: routing IP + daftar user (/peers), flow dasar,
+                        # retry urutan-bebas, tie-break mutual-connect, /connect by name + user:list + init
 npm run test:pod -- --home .p2pod/alice   # round-trip JSON-LD ke Pod
 npm run test:e2e        # E2E penuh: chat -> save Pod -> reconnect -> load history
 npm run typecheck       # verifikasi TypeScript
 ```
 
 `test:e2e` menyiapkan segalanya sendiri (menjalankan CSS + provisioning bila perlu).
+Untuk menghentikan Pod lokal yang dijalankan otomatis oleh wizard user: `npm run pod:stop` (opsional `-- --name <nama>`).
 
 ---
 
@@ -193,7 +220,7 @@ Get-Content $f.FullName -Raw | ConvertFrom-Json | ConvertTo-Json -Depth 10
 
 > **Quirk penamaan file CSS**: resource `sessions/2026-11-05T06-06-22-491Z.json` tersimpan di disk sebagai `2026-11-05T06-06-22-491Z.json$.jsonld` — `$` adalah separator ekstensi internal CSS dan `.jsonld` menandakan serialisasi JSON-LD (URL resource tetap `.json`). Di PowerShell gunakan kutip satu (`'...'`) saat menyebut path yang mengandung `$`.
 
-Untuk pod bob, ganti `.css\alice\alice` menjadi `.css\bob\bob`.
+Untuk pod bob, ganti `.css\alice\alice` menjadi `.css\bob\bob`. Untuk pod buatan wizard (`npm run role:user`), path-nya `.css\<nama>\<nama>\...` (mis. `.css\rani\rani\p2pod\chats\...`).
 
 ### Cara 2 — Lewat API Solid (terprogram)
 
@@ -264,7 +291,9 @@ Halaman ini untuk mengelola akun: pod, login, dan **client credentials** (sumber
 | `Could not build the config files ... Invalid term IRI: file://...` (CSS crash) | Path project mengandung spasi. Jalankan `npm run patch:css` (otomatis saat `npm install`) lalu ulangi. Alternatif: pindahkan project ke path tanpa spasi, mis. `C:\P2Pod` |
 | `Menunggu peer online...` terus muncul | Normal bila target belum dibuka — connector retry tiap 3 dtk; pastikan Peer ID benar (bandingkan fingerprint) |
 | `Peer tidak ditemukan` | Hanya muncul sebagai pesan tunggu; peer dianggap lewat TTL 60 dtk bila heartbeat berhenti |
-| `Konfigurasi Pod tidak ditemukan` | Jalankan `npm run setup:pod:alice` / `npm run setup:pod:bob` sesuai panduan |
+| ⚠ `Solid Pod tidak aktif: Konfigurasi Pod tidak ditemukan` saat start | Bukan lagi crash — chat tetap jalan tanpa history. Jalankan `npm run setup:pod:alice` / `setup:pod:bob`, atau (jalur wizard) `npm run role:user -- --reconfigure` agar Pod lokal disiapkan otomatis |
 | ⚠ `Solid Pod tidak terjangkau` saat start | CSS Pod tidak jalan — jalankan `npm run css:alice`/`css:bob` (atau biarkan wizard user menyalakannya), lalu restart aplikasi. Chat tetap bisa tanpa Pod, tetapi history tidak disimpan |
+| ⚠ `Setup Pod otomatis gagal` saat `role:user` | CSS tidak bisa disiapkan otomatis (port terpakai / kredensial lama). Coba lagi: `npm run role:user -- --reconfigure`, atau jalankan tanpa Pod: tambahkan `--no-pod` |
+| Pod lokal tidak bisa dihentikan | `npm run pod:stop` (semua) atau `npm run pod:stop -- --name <nama>`; data tetap tersimpan di `.css/<nama>/` |
 | `Login ke Solid Pod gagal` | CSS harus berjalan; jalankan ulang `setup:pod` |
 | Port bentrok (`EADDRINUSE`) | Di satu mesin beri `--port` berbeda tiap peer (alice 5000, bob 5001) atau hentikan proses lama (`taskkill /PID <pid> /T /F`) |
