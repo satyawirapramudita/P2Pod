@@ -1,9 +1,10 @@
 // scripts/smoke-test.ts
 // Smoke test end-to-end tanpa Pod:
-//   Fase 0: routing IP Discovery Platform (klaim IP dari loopback vs anti-spoof remote)
+//   Fase 0: routing IP Discovery Platform (klaim IP loopback vs anti-spoof remote) + daftar user (/peers)
 //   Fase 1: flow dasar (listen dulu, lalu connect)
 //   Fase 2: urutan dibalik — connector start lebih dulu, retry sampai listener online
 //   Fase 3: kedua sisi saling --connect (tie-break: hanya satu sesi terbentuk)
+//   Fase 4: /connect by name (runtime) + user:list + init non-interaktif
 
 import { ChildProcessWithoutNullStreams, execFileSync, spawn } from 'child_process';
 import * as fs from 'fs';
@@ -272,6 +273,82 @@ async function phase3(alicePeerId: string, bobPeerId: string): Promise<void> {
   assert(bobCode === 0 && aliceCode === 0, `fase 3 exit code 0 (bob=${bobCode}, alice=${aliceCode})`);
 }
 
+async function phase4(): Promise<void> {
+  console.log('\n=== Fase 4: /connect by name + user:list + init non-interaktif ===\n');
+
+  const alice = start(
+    'alice4',
+    'npx',
+    cliArgs(['--home', '.p2pod/test-alice', '--listen', '--port', String(ALICE_PORT), '--name', 'alice'])
+  );
+  await waitFor(alice, /Menunggu koneksi masuk/);
+
+  const bob = start(
+    'bob4',
+    'npx',
+    cliArgs(['--home', '.p2pod/test-bob', '--listen', '--port', String(BOB_PORT), '--name', 'bob'])
+  );
+  await waitFor(bob, /Menunggu koneksi masuk/);
+
+  // user:list (one-shot) — harus menampilkan alice & bob
+  const listProc = start('userlist', 'npx', [
+    'ts-node',
+    'packages/user-client/src/main.ts',
+    'list',
+    '--discovery',
+    `http://localhost:${DISCOVERY_PORT}`,
+  ]);
+  await waitFor(listProc, /alice/);
+  await waitFor(listProc, /bob/);
+  const listCode = await waitExit(listProc);
+  assert(listCode === 0, `user:list exit 0 (dapat ${listCode})`);
+
+  // alice menghubungi bob via nama (perintah runtime /connect)
+  alice.child.stdin.write('/connect bob\n');
+  await waitFor(alice, /Sesi aman terbentuk dengan "bob"/);
+  await waitFor(bob, /Sesi aman terbentuk dengan "alice"/);
+
+  alice.child.stdin.write('halo bob via nama\n');
+  await waitFor(bob, /halo bob via nama/);
+
+  alice.child.stdin.write('/quit\n');
+  alice.child.stdin.end();
+  const aliceCode = await waitExit(alice);
+  const bobCode = await waitExit(bob);
+  assert(aliceCode === 0 && bobCode === 0, `fase 4 exit code 0 (alice=${aliceCode}, bob=${bobCode})`);
+
+  // init non-interaktif (semua nilai dari flag) + config tersimpan
+  const initProc = start('carol-init', 'npx', [
+    'ts-node',
+    'packages/user-client/src/main.ts',
+    'init',
+    '--home',
+    '.p2pod/test-carol',
+    '--name',
+    'carol',
+    '--discovery',
+    `http://localhost:${DISCOVERY_PORT}`,
+    '--port',
+    '5910',
+    '--no-pod',
+  ]);
+  await waitFor(initProc, /Menunggu koneksi masuk/);
+
+  const configFile = path.join(ROOT, '.p2pod', 'test-carol', 'config.json');
+  assert(fs.existsSync(configFile), 'init menulis .p2pod/test-carol/config.json');
+  const carolConfig = JSON.parse(fs.readFileSync(configFile, 'utf8')) as {
+    displayName: string;
+    discoveryUrl: string;
+  };
+  assert(carolConfig.displayName === 'carol', 'config berisi displayName');
+  assert(carolConfig.discoveryUrl.includes(`:${DISCOVERY_PORT}`), 'config berisi discoveryUrl');
+
+  initProc.child.stdin.write('/quit\n');
+  initProc.child.stdin.end();
+  const carolCode = await waitExit(initProc);
+  assert(carolCode === 0, `init app exit code 0 (dapat ${carolCode})`);
+}
+
 async function main(): Promise<void> {
   console.log('--- Smoke test P2Pod (tanpa Pod) ---');
   const t0 = Date.now();
@@ -288,6 +365,7 @@ async function main(): Promise<void> {
 
   await phase2(alicePeerId);
   await phase3(alicePeerId, bobPeerId);
+  await phase4();
 
   console.log('\n--- Hasil akhir ---');
   const health = (await (await fetch(`http://localhost:${DISCOVERY_PORT}/health`)).json()) as { peers: number };

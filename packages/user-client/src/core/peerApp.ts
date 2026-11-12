@@ -1,12 +1,13 @@
-// src/core/peerApp.ts
+// packages/user-client/src/core/peerApp.ts
 
 import { TcpConnectionManager, ManagedConnection } from '../net/tcpConnection';
 import { CryptoEngine } from '../crypto/cryptoEngine';
 import { TerminalUI } from '../ui/terminalUI';
 import type { AnyMessage, HandshakeMessage, IdentityProofMessage, ChatMessage } from '@p2pod/shared';
 import { Identity, fingerprintOf, verifyWithPeerId } from '../identity/identity';
-import { DiscoveryClient } from '../discovery/discoveryClient';
+import { DiscoveryClient, isValidIpv4 } from '../discovery/discoveryClient';
 import { ChatSessionMeta, HistoryEntry, SolidClient } from '../modules/pod/solidClient';
+import { looksLikePeerId, pickPeerBySpec } from '../targetResolver';
 
 export interface PeerAppOptions {
   identity: Identity;
@@ -15,6 +16,8 @@ export interface PeerAppOptions {
   podUrl?: string;
   listenPort: number;
   targetPeerId?: string;
+  targetIp?: string;
+  targetPort?: number;
 }
 
 const CONNECT_RETRY_INTERVAL_MS = 3000;
@@ -25,6 +28,8 @@ function delay(ms: number): Promise<void> {
   });
 }
 
+type ConnectAttemptResult = 'connected' | 'retry' | 'wait';
+
 export class PeerApp {
   private readonly identity: Identity;
   private readonly tcpManager = new TcpConnectionManager();
@@ -33,13 +38,19 @@ export class PeerApp {
   private readonly discovery: DiscoveryClient;
   private readonly pod: SolidClient | null;
   private readonly listenPort: number;
-  private readonly targetPeerId: string | null;
+  private readonly targetPort: number;
+
+  private targetPeerId: string | null;
+  private targetIp: string | null;
 
   private conn: ManagedConnection | null = null;
   private seq = 1;
   private sessionReady = false;
   private closing = false;
   private exitCode = 0;
+  private connecting = false;
+  private watcherRunning = false;
+  private mutualNoticeShown = false;
 
   private remotePeerId: string | null = null;
   private remoteDisplayName: string | null = null;
@@ -52,6 +63,8 @@ export class PeerApp {
     this.identity = options.identity;
     this.listenPort = options.listenPort;
     this.targetPeerId = options.targetPeerId ?? null;
+    this.targetIp = options.targetIp ?? null;
+    this.targetPort = options.targetPort ?? 5000;
     this.discovery = new DiscoveryClient(options.discoveryUrl);
     this.ui = new TerminalUI(this.identity.displayName, () => {
       void this.shutdown('Input ditutup (Ctrl+D)...');
@@ -65,7 +78,8 @@ export class PeerApp {
 
   /**
    * Mode online (semua peran sama): dengarkan koneksi TCP, daftar ke Discovery Platform,
-   * lalu (bila ada target) hubungi target secara berkala sampai online — urutan start bebas.
+   * aktifkan command loop pra-sesi (/connect, /list, /help), lalu bila ada target
+   * hubungi target secara berkala sampai online.
    */
   async start(): Promise<void> {
     this.setupShutdownHooks();
@@ -79,18 +93,17 @@ export class PeerApp {
     };
     await this.discovery.register(this.identity.peerId, boundPort, registerOpts);
     this.discovery.startHeartbeat(this.identity.peerId, boundPort, registerOpts);
-    this.ui.printSystem('Terdaftar di Discovery Platform (urutan start bebas).');
-    this.ui.printSystem('Peer ID Anda (bisa diberikan ke peer mana pun):');
-    console.log(`  ${this.identity.peerId}`);
-    this.ui.printSystem(`Fingerprint: ${this.identity.fingerprint}`);
+    this.ui.printSystem('Terdaftar di Discovery Platform.');
+    this.ui.printSystem('Perintah: /connect <nama|PeerID> · /list · /help · /quit');
 
-    if (this.targetPeerId) {
-      this.ui.printSystem(
-        `Akan menghubungi peer dengan fingerprint ${fingerprintOf(this.targetPeerId)} — dicoba berkala sampai online...`
-      );
-      void this.runConnectWatcher();
+    this.startCommandLoop();
+
+    if (this.targetPeerId || this.targetIp) {
+      this.beginConnecting(this.targetIp ? `di ${this.targetIp}:${this.targetPort}` : 'via Discovery Platform');
     } else {
-      this.ui.printSystem('Menunggu koneksi masuk...');
+      this.ui.printSystem(
+        'Menunggu koneksi masuk... (ketik /connect untuk menghubungi user lain, /list untuk daftar user)'
+      );
     }
 
     await new Promise<void>(() => {
@@ -98,49 +111,88 @@ export class PeerApp {
     });
   }
 
-  /** Watcher: cari target di discovery secara berkala, lalu inisiasi koneksi (atau tunggu bila tie-break). */
-  private async runConnectWatcher(): Promise<void> {
-    const target = this.targetPeerId!;
+  /** Mulai proses menghubungi peer (dipakai CLI & perintah runtime /connect). */
+  private beginConnecting(viaText: string, label?: string): void {
+    if (!this.targetPeerId || this.watcherRunning || this.closing) return;
+    this.connecting = true;
+    const who = label ? `"${label}" ` : '';
+    this.ui.printSystem(
+      `Menghubungi ${who}target fingerprint ${fingerprintOf(this.targetPeerId)} ${viaText} — dicoba berkala sampai online...`
+    );
+    void this.startConnectWatcher();
+  }
+
+  /** Watcher: cari target lewat Discovery (atau koneksi langsung bila targetIp diisi) secara berkala. */
+  private async startConnectWatcher(): Promise<void> {
+    if (this.watcherRunning || !this.targetPeerId) return;
+    this.watcherRunning = true;
+    const target = this.targetPeerId;
     let attempt = 0;
 
-    while (!this.closing && !this.sessionReady) {
-      attempt++;
+    try {
+      while (!this.closing && !this.sessionReady) {
+        attempt++;
 
-      if (!this.conn) {
-        try {
-          const endpoint = await this.discovery.lookup(target);
-
-          // Tie-break: bila kedua sisi saling --connect, Peer ID lebih besar yang menginisiasi.
-          const mutual = endpoint.targetPeerId === this.identity.peerId;
-          const iAmInitiator = this.identity.peerId > target;
-
-          if (mutual && !iAmInitiator) {
-            if (attempt === 1) {
-              this.ui.printSystem(
-                'Kedua peer saling --connect: Peer ID lebih besar yang menginisiasi. Menunggu koneksi masuk...'
-              );
-            }
-          } else {
-            try {
-              const conn = await this.tcpManager.connect(endpoint.ip, endpoint.port);
-              if (this.closing || this.sessionReady || this.conn) {
-                conn.close(); // sudah ada koneksi/sesi lain — batalkan outbound ini
-              } else {
-                this.beginSession(conn);
-                return;
-              }
-            } catch {
-              // konek gagal (peer mungkin baru saja keluar) — coba lagi pada iterasi berikutnya
-            }
-          }
-        } catch {
-          if (attempt === 1 || attempt % 5 === 0) {
+        if (!this.conn) {
+          const result = await this.tryConnectOnce(target);
+          if (result === 'connected') break;
+          if (result === 'retry' && (attempt === 1 || attempt % 5 === 0)) {
             this.ui.printSystem(`Menunggu peer online... (percobaan ${attempt})`);
           }
         }
-      }
 
-      await delay(CONNECT_RETRY_INTERVAL_MS);
+        await delay(CONNECT_RETRY_INTERVAL_MS);
+      }
+    } finally {
+      this.watcherRunning = false;
+    }
+  }
+
+  private async tryConnectOnce(target: string): Promise<ConnectAttemptResult> {
+    // Mode direct: koneksi TCP langsung ke IP target, tanpa lookup Discovery.
+    if (this.targetIp) {
+      try {
+        const conn = await this.tcpManager.connect(this.targetIp, this.targetPort);
+        if (this.closing || this.sessionReady || this.conn) {
+          conn.close();
+          return 'retry';
+        }
+        this.beginSession(conn);
+        return 'connected';
+      } catch {
+        return 'retry';
+      }
+    }
+
+    let endpoint;
+    try {
+      endpoint = await this.discovery.lookup(target);
+    } catch {
+      return 'retry';
+    }
+
+    // Tie-break: bila kedua sisi saling connect, Peer ID lebih besar yang menginisiasi.
+    const mutual = endpoint.targetPeerId === this.identity.peerId;
+    if (mutual && this.identity.peerId < target) {
+      if (!this.mutualNoticeShown) {
+        this.mutualNoticeShown = true;
+        this.ui.printSystem(
+          'Kedua peer saling connect: Peer ID lebih besar yang menginisiasi — menunggu koneksi masuk...'
+        );
+      }
+      return 'wait';
+    }
+
+    try {
+      const conn = await this.tcpManager.connect(endpoint.ip, endpoint.port);
+      if (this.closing || this.sessionReady || this.conn) {
+        conn.close();
+        return 'retry';
+      }
+      this.beginSession(conn);
+      return 'connected';
+    } catch {
+      return 'retry';
     }
   }
 
@@ -227,6 +279,7 @@ export class PeerApp {
     this.remotePeerId = null;
     this.remoteDisplayName = null;
     this.transcript = null;
+    this.connecting = false;
     this.crypto.reset();
     try {
       conn.close();
@@ -252,13 +305,14 @@ export class PeerApp {
     this.crypto.activateSessionKey(this.transcript);
     this.chatId = this.crypto.deriveChatId(this.identity.peerId, peerId);
     this.sessionReady = true;
+    this.connecting = false;
 
     this.ui.printSystem(`Sesi aman terbentuk dengan "${this.remoteDisplayName}".`);
     this.ui.printSystem(`Peer terverifikasi: fingerprint ${fingerprintOf(peerId)}.`);
     this.ui.printSystem(`chat_id: ${this.chatId}`);
 
     await this.loadHistoryFromPod();
-    this.startChatLoop(conn);
+    this.ui.printSystem('Ketik pesan lalu Enter. /quit untuk mengakhiri sesi.');
   }
 
   private async loadHistoryFromPod(): Promise<void> {
@@ -294,27 +348,135 @@ export class PeerApp {
     }
   }
 
-  private startChatLoop(conn: ManagedConnection): void {
-    this.ui.printSystem('Ketik pesan lalu Enter. /quit untuk mengakhiri sesi.');
+  // ---------------------------------------------------------------------------
+  // Command loop pra-sesi (aktif sejak start; perintah + chat lewat satu jalur)
+  // ---------------------------------------------------------------------------
 
+  private startCommandLoop(): void {
     this.ui.startInputLoop((text) => {
-      if (text === '/quit') {
-        void this.shutdown('Keluar atas permintaan user...');
-        return;
-      }
-
-      if (!this.sessionReady) {
-        this.ui.printSystem('Sesi belum siap.');
-        return;
-      }
-
-      const msg = this.crypto.encryptChat(this.identity.displayName, text, this.seq++);
-      conn.send(msg);
-
-      // local echo + catat ke history sesi
-      this.recordHistory('sent', this.identity.displayName, text, msg.timestamp, msg.seq);
-      this.ui.printChat(this.identity.displayName, msg.timestamp, text);
+      void this.handleInput(text);
     });
+  }
+
+  private async handleInput(text: string): Promise<void> {
+    if (text === '/quit') {
+      void this.shutdown('Keluar atas permintaan user...');
+      return;
+    }
+    if (text === '/help') {
+      this.printHelp();
+      return;
+    }
+    if (text === '/list') {
+      await this.printOnlinePeers();
+      return;
+    }
+    if (text === '/connect' || text.startsWith('/connect ')) {
+      await this.handleConnectCommand(text);
+      return;
+    }
+
+    if (!this.sessionReady) {
+      this.ui.printSystem(
+        'Sesi belum aktif. Gunakan /connect <nama|PeerID> untuk menghubungi user, /list untuk daftar user, /help untuk bantuan.'
+      );
+      return;
+    }
+
+    const conn = this.conn;
+    if (!conn) return;
+
+    const msg = this.crypto.encryptChat(this.identity.displayName, text, this.seq++);
+    conn.send(msg);
+
+    // local echo + catat ke history sesi
+    this.recordHistory('sent', this.identity.displayName, text, msg.timestamp, msg.seq);
+    this.ui.printChat(this.identity.displayName, msg.timestamp, text);
+  }
+
+  private printHelp(): void {
+    this.ui.printSystem('Perintah yang tersedia:');
+    console.log('  /connect <nama|PeerID>   Hubungi user (nama dari /list, atau Peer ID)');
+    console.log('  /connect <IP> <PeerID>   Hubungi langsung tanpa Discovery (TCP langsung ke IP)');
+    console.log('  /list                    Tampilkan user yang sedang online');
+    console.log('  /help                    Tampilkan bantuan ini');
+    console.log('  /quit                    Akhiri sesi & simpan history');
+  }
+
+  private async handleConnectCommand(text: string): Promise<void> {
+    if (this.sessionReady) {
+      this.ui.printSystem('Sesi sudah aktif — /connect hanya bisa dipakai sebelum sesi terbentuk.');
+      return;
+    }
+    if (this.connecting) {
+      this.ui.printSystem('Sedang dalam proses menghubungi peer — tunggu sebentar. (/quit untuk membatalkan)');
+      return;
+    }
+    if (this.conn) {
+      this.ui.printSystem('Sedang ada koneksi masuk/aktif — tunggu sesi terbentuk.');
+      return;
+    }
+
+    const parts = text.trim().split(/\s+/).slice(1);
+    if (parts.length === 0) {
+      this.ui.printSystem('Penggunaan: /connect <nama|PeerID>  |  /connect <IP> <PeerID>');
+      return;
+    }
+
+    if (parts.length >= 2) {
+      // Direct: /connect <IP> <PeerID>
+      const [ip, peerId] = parts;
+      if (!isValidIpv4(ip)) {
+        this.ui.printSystem(`IP tidak valid: ${ip}`);
+        return;
+      }
+      if (!looksLikePeerId(peerId)) {
+        this.ui.printSystem('Argumen kedua harus Peer ID (berawalan MCowBQYDK2Vw...).');
+        return;
+      }
+      this.beginConnectTo(peerId, ip);
+      return;
+    }
+
+    // Satu argumen: nama atau Peer ID
+    const spec = parts[0];
+    if (looksLikePeerId(spec)) {
+      this.beginConnectTo(spec, null);
+      return;
+    }
+
+    try {
+      const peers = await this.discovery.listPeers();
+      const resolved = pickPeerBySpec(spec, peers);
+      this.beginConnectTo(resolved.peerId, null, resolved.displayName);
+    } catch (err: any) {
+      this.ui.printSystem(`Gagal menghubungi "${spec}": ${err.message}`);
+    }
+  }
+
+  private beginConnectTo(peerId: string, ip: string | null, label?: string): void {
+    this.targetPeerId = peerId;
+    this.targetIp = ip;
+    this.beginConnecting(ip ? `di ${ip}:${this.targetPort}` : 'via Discovery Platform', label);
+  }
+
+  private async printOnlinePeers(): Promise<void> {
+    try {
+      const peers = await this.discovery.listPeers();
+      const others = peers.filter((peer) => peer.peerId !== this.identity.peerId);
+      if (others.length === 0) {
+        this.ui.printSystem('Belum ada user lain yang online di Discovery Platform.');
+        return;
+      }
+      this.ui.printSystem(`User online (${others.length}):`);
+      for (const peer of others) {
+        const name = peer.displayName ?? '(tanpa nama)';
+        console.log(`  • ${name}  [${fingerprintOf(peer.peerId)}]`);
+      }
+      this.ui.printSystem('Hubungi dengan: /connect <nama|PeerID>');
+    } catch (err: any) {
+      this.ui.printSystem(`Gagal mengambil daftar user: ${err.message}`);
+    }
   }
 
   private recordHistory(
