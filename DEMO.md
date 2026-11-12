@@ -22,6 +22,8 @@ npm install
 
 ## Skenario A — Demo 1 Mesin (2 Terminal)
 
+> ⚡ Alternatif paling sederhana (tanpa setup manual, Pod otomatis): `npm run role:user` — lihat **Skenario C**.
+
 Akun demo dari seed: `alice@example.com` / `bob@example.com`, password `p2pod-demo-123`.
 
 ### 1. Jalankan infrastruktur (3 terminal terpisah)
@@ -96,6 +98,8 @@ Jalankan langkah 3 lagi — history sesi sebelumnya otomatis dimuat dari Pod dan
 
 ## Skenario B — Demo 2 Mesin (LAN/Hotspot)
 
+> ⚡ Versi paling sederhana dari skenario ini (script modular): lihat **Skenario C** di bawah.
+
 Mesin A (alice) dan Mesin B (bob) di jaringan yang sama. Discovery Platform bisa di Mesin A atau mesin ketiga.
 
 **Mesin A:**
@@ -127,6 +131,48 @@ Catatan:
 - Peran dapat ditukar: Mesin A boleh `--connect` dan Mesin B `--listen`.
 - Pod selalu di `localhost` masing-masing device — hanya pemilik yang menulis ke Pod-nya sendiri.
 - Kedua mesin harus berada di jaringan/hotspot yang sama (bandingkan SSID dan subnet `ipconfig` di kedua mesin).
+
+---
+
+## Skenario C — Demo 2 Device, Jalur Modular (paling sederhana)
+
+Untuk 2 device dalam satu jaringan/hotspot. Pod riwayat **disiapkan otomatis** di tiap device — tidak perlu `setup:pod` manual. Wizard hanya bertanya **2 hal**: nama & URL discovery.
+
+**Device A (host Discovery + user alice):**
+
+T1 — Host Discovery Platform (biarkan berjalan):
+```bash
+npm run role:discovery
+# Catat URL LAN dari banner, mis. http://192.168.1.10:4000/
+# Bila device lain tidak bisa connect: jalankan perintah firewall yang dicetak (sekali saja, sebagai Administrator)
+```
+
+T2 — User alice:
+```bash
+npm run role:user
+#   Nama          : alice
+#   URL discovery : http://localhost:4000   ← boleh localhost; discovery ada di mesin ini
+#   → Pod lokal + provisioning otomatis → aplikasi listening
+```
+
+**Device B (user bob):**
+```bash
+npm run role:user
+#   Nama          : bob
+#   URL discovery : http://192.168.1.10:4000   ← IP LAN Device A (dari banner T1)
+#   → Pod lokal + provisioning otomatis → aplikasi listening
+```
+
+**Mulai chat** (di prompt salah satu device):
+```
+/list             # melihat alice & bob online
+/connect bob      # (dari alice) — yang connect lebih dulu menjadi connector
+```
+Perintah satu-jalan juga tersedia: `npm run user:list` dan `npm run user:connect -- bob`.
+
+**Akhiri:** `/quit` → history tersimpan di Pod masing-masing device, dan otomatis dimuat saat sesi berikutnya.
+
+> Catatan: startup pertama tiap device lebih lama (menjalankan CSS + provisioning Pod, ± 15–60 dtk). Menjalankan `npm run role:user` lagi akan memakai config tersimpan tanpa pertanyaan.
 
 ---
 
@@ -285,7 +331,7 @@ Halaman ini untuk mengelola akun: pod, login, dan **client credentials** (sumber
 | Gejala | Solusi |
 |---|---|
 | `Discovery Platform tidak terjangkau` | Pastikan `npm run discovery` berjalan; cek URL `--discovery` |
-| `Discovery Platform tidak terjangkau ... timeout` (demo 2 mesin) | Cek IP LAN Mesin A dengan `ipconfig` (IP `192.168.1.10` di dokumen hanya ilustrasi). Dari Mesin B: `ping <IP_ALICE>` lalu `Test-NetConnection <IP_ALICE> -Port 4000`. Ping gagal → beda jaringan/hotspot (atau AP-isolation di router); ping OK tapi port gagal → buka firewall Mesin A (lihat Skenario B) |
+| `Discovery Platform tidak terjangkau ... timeout` (demo 2 mesin) | Banner `npm run role:discovery` mencetak URL LAN (pakai itu — IP di dokumen hanya ilustrasi) **dan** perintah firewall Windows siap-pakai; jalankan sekali sebagai Administrator bila perlu. Uji dari device client: `ping <IP_HOST>` lalu `Test-NetConnection <IP_HOST> -Port 4000`. Ping gagal → beda jaringan/hotspot (atau AP-isolation di router); ping OK tapi port gagal → firewall host belum dibuka |
 | `Koneksi dari peer tak dikenal` berulang dengan fingerprint milik peer sendiri | Gejala versi lama: peer co-located terdaftar sebagai `127.0.0.1`. Update ke versi terbaru (IP LAN dideteksi otomatis), atau sementara jalankan Mesin A dengan `--discovery http://<IP_ALICE>:4000` |
 | `Argumen tidak dikenal: http://...` saat setup | Flag tertelan npm — pakai `npm run setup:pod:alice` / `setup:pod:bob`, atau sertakan separator `--` sebelum argumen |
 | `Could not build the config files ... Invalid term IRI: file://...` (CSS crash) | Path project mengandung spasi. Jalankan `npm run patch:css` (otomatis saat `npm install`) lalu ulangi. Alternatif: pindahkan project ke path tanpa spasi, mis. `C:\P2Pod` |
