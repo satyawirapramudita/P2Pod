@@ -20,6 +20,7 @@
     "start": "ts-node packages/user-client/src/main.ts",
     "css:alice": "community-solid-server -c @css:config/file.json -f .css/alice -p 3000 -b http://localhost:3000/ --seedConfig css/seed-alice.json",
     "css:bob": "community-solid-server -c @css:config/file.json -f .css/bob -p 3001 -b http://localhost:3001/ --seedConfig css/seed-bob.json",
+    "pod:stop": "ts-node scripts/pod-stop.ts",
     "setup:pod": "ts-node scripts/setup-pod-account.ts",
     "setup:pod:alice": "ts-node scripts/setup-pod-account.ts --css http://localhost:3000/ --email alice@example.com --password p2pod-demo-123 --pod alice --home .p2pod/alice",
     "setup:pod:bob": "ts-node scripts/setup-pod-account.ts --css http://localhost:3001/ --email bob@example.com --password p2pod-demo-123 --pod bob --home .p2pod/bob",

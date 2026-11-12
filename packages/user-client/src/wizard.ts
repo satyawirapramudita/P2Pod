@@ -5,6 +5,7 @@
 import { createPrompter } from './prompt';
 import { Identity, ensureDir } from './identity/identity';
 import { loadConfig, saveConfig, PodSettings, UserConfig } from './config';
+import { generatePassword, localCssPortOf, podNameFromDisplayName, setupLocalPod } from './modules/pod/provision';
 
 export interface WizardOptions {
   homeDir: string;
@@ -96,7 +97,7 @@ export async function runWizard(opts: WizardOptions): Promise<WizardResult> {
       throw new Error(`Port TCP tidak valid (1-65535): ${listenPort}`);
     }
 
-    // 4/4 — Solid Pod (opsional)
+    // 4/4 — Solid Pod (opsional; pod lokal otomatis disiapkan)
     let pod: PodSettings;
     if (opts.podDisabled) {
       pod = { enabled: false };
@@ -110,11 +111,42 @@ export async function runWizard(opts: WizardOptions): Promise<WizardResult> {
     } else {
       const wantsPod = await prompter.askYesNo('4/4 Aktifkan riwayat chat di Solid Pod?');
       if (wantsPod) {
-        const defaultPod = `http://localhost:3000/${encodeURIComponent(displayName)}/`;
-        const podUrl = normalizeUrl(await prompter.askDefault('  URL Pod', defaultPod));
-        pod = { enabled: true, podUrl };
+        const defaultPod = `http://localhost:3000/${podNameFromDisplayName(displayName)}/`;
+        const podUrlInput = normalizeUrl(await prompter.askDefault('  URL Pod', defaultPod));
+        pod = { enabled: true, podUrl: podUrlInput };
       } else {
         pod = { enabled: false };
+      }
+    }
+
+    // Pod lokal (localhost): siapkan CSS + provisioning akun otomatis.
+    if (pod.enabled && !pod.podUrl) {
+      pod = { enabled: false };
+    }
+    if (pod.enabled && pod.podUrl) {
+      const cssPort = localCssPortOf(pod.podUrl);
+      if (cssPort) {
+        const email = pod.email ?? `${podNameFromDisplayName(displayName)}@example.com`;
+        const password = pod.password ?? generatePassword();
+        console.log(`  Menyiapkan Solid Pod lokal (CSS port ${cssPort})...`);
+        try {
+          const result = await setupLocalPod({
+            homeDir: opts.homeDir,
+            displayName,
+            cssPort,
+            email,
+            password,
+            podUrl: pod.podUrl,
+          });
+          pod = { enabled: true, podUrl: result.podUrl, cssPort, email, password };
+          console.log(`  Pod siap: ${pod.podUrl}${result.provisioned ? ' (akun baru di-provision)' : ''}`);
+        } catch (err: any) {
+          console.log(`  ⚠ Setup Pod otomatis gagal: ${err.message}`);
+          console.log('  Chat tetap bisa dijalankan tanpa Pod. Coba lagi dengan: npm run role:user -- --reconfigure');
+          pod = { enabled: false };
+        }
+      } else {
+        console.log('  (Pod non-lokal — pastikan pod-config.json sudah tersedia di home ini)');
       }
     }
 

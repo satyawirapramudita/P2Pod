@@ -79,6 +79,17 @@ export class SolidClient {
     this.loggedIn = true;
   }
 
+  /** Cek cepat apakah server Pod merespons (status HTTP apa pun dianggap hidup). */
+  async ping(): Promise<boolean> {
+    try {
+      const response = await fetch(this.podUrl, { signal: AbortSignal.timeout(4000) });
+      await response.text().catch(() => undefined);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async logout(): Promise<void> {
     if (!this.loggedIn) return;
     await this.session.logout();

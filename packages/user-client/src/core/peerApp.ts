@@ -37,6 +37,7 @@ export class PeerApp {
   private readonly ui: TerminalUI;
   private readonly discovery: DiscoveryClient;
   private readonly pod: SolidClient | null;
+  private readonly podInitError: string | null;
   private readonly listenPort: number;
   private readonly targetPort: number;
 
@@ -69,7 +70,18 @@ export class PeerApp {
     this.ui = new TerminalUI(this.identity.displayName, () => {
       void this.shutdown('Input ditutup (Ctrl+D)...');
     });
-    this.pod = options.podUrl ? new SolidClient(options.homeDir, options.podUrl) : null;
+
+    let pod: SolidClient | null = null;
+    let podInitError: string | null = null;
+    if (options.podUrl) {
+      try {
+        pod = new SolidClient(options.homeDir, options.podUrl);
+      } catch (err: any) {
+        podInitError = err.message;
+      }
+    }
+    this.pod = pod;
+    this.podInitError = podInitError;
   }
 
   get peerId(): string {
@@ -94,6 +106,18 @@ export class PeerApp {
     await this.discovery.register(this.identity.peerId, boundPort, registerOpts);
     this.discovery.startHeartbeat(this.identity.peerId, boundPort, registerOpts);
     this.ui.printSystem('Terdaftar di Discovery Platform.');
+
+    if (this.podInitError) {
+      this.ui.printSystem(`⚠ Solid Pod tidak aktif: ${this.podInitError}`);
+      this.ui.printSystem('  Chat tetap berjalan, tetapi history tidak akan dimuat/disimpan.');
+    } else if (this.pod) {
+      const podReachable = await this.pod.ping();
+      if (!podReachable) {
+        this.ui.printSystem('⚠ Solid Pod tidak terjangkau — history tidak akan dimuat/disimpan.');
+        this.ui.printSystem('  Jalankan CSS Pod terlebih dahulu (mis. `npm run css:alice`), lalu restart aplikasi ini.');
+      }
+    }
+
     this.ui.printSystem('Perintah: /connect <nama|PeerID> · /list · /help · /quit');
 
     this.startCommandLoop();
