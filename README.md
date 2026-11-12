@@ -31,7 +31,7 @@ npm run role:discovery            # default port 4000
 npm run role:discovery -- 4100    # port lain (opsional)
 ```
 
-Server akan menampilkan alamat LAN-nya, mis. `http://192.168.1.10:4000` — **bagikan URL ini** ke user yang mau gabung.
+Server akan menampilkan URL LAN untuk dibagikan, mis. `http://192.168.1.10:4000/` — **bagikan URL ini** ke user yang mau gabung. Banner juga mencetak perintah Windows Firewall siap-pakai (jalankan sekali sebagai Administrator bila device lain tidak bisa connect).
 
 ---
 
@@ -41,12 +41,12 @@ Server akan menampilkan alamat LAN-nya, mis. `http://192.168.1.10:4000` — **ba
 npm run role:user
 ```
 
-Wizard 4 langkah:
+Wizard 2 langkah (sisanya otomatis):
 
 1. **Nama** (wajib — tampil di daftar user)
 2. **URL Discovery Platform** (mis. `http://192.168.1.10:4000`) — divalidasi otomatis
-3. **Port TCP** (default 5000) untuk menerima koneksi
-4. **Solid Pod?** (y/N) — jika ya: Pod lokal `http://localhost:3000/<nama>/` disiapkan **otomatis** (CSS dijalankan + akun di-provision), atau berikan URL Pod lain
+
+Otomatis: **port TCP 5000** (ubah dengan `--port`) dan **Solid Pod lokal** `http://localhost:3000/<nama>/` yang disiapkan sendiri — CSS dijalankan + akun Pod di-provision. Nonaktifkan Pod dengan `--no-pod`.
 
 Setelah selesai, aplikasi langsung berjalan (listening) dan menampilkan **Peer ID**, **IP LAN**, serta daftar user online.
 

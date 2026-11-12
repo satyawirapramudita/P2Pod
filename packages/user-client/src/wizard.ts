@@ -56,7 +56,7 @@ export async function runWizard(opts: WizardOptions): Promise<WizardResult> {
       if (!interactive) {
         throw new Error('Nama belum diisi — tambahkan --name <nama> (atau jalankan di terminal interaktif).');
       }
-      displayName = (await prompter.ask('1/4 Nama kamu (wajib, tampil di daftar user): ')).trim();
+      displayName = (await prompter.ask('1/2 Nama kamu (wajib, tampil di daftar user): ')).trim();
       if (displayName.length === 0) console.log('  Nama tidak boleh kosong.');
     }
 
@@ -69,14 +69,21 @@ export async function runWizard(opts: WizardOptions): Promise<WizardResult> {
         if (!interactive) {
           throw new Error('URL Discovery Platform belum diisi — tambahkan --discovery <url>.');
         }
-        discoveryUrl = normalizeUrl(await prompter.ask('2/4 URL Discovery Platform (mis. http://192.168.1.10:4000): '));
+        discoveryUrl = normalizeUrl(await prompter.ask('2/2 URL Discovery Platform (mis. http://192.168.1.10:4000): '));
       }
       const problem = await checkDiscovery(discoveryUrl);
       if (!problem) break;
 
       console.log(`  Discovery Platform tidak OK: ${problem}`);
+      console.log('  Petunjuk:');
+      console.log('   - Pastikan host menjalankan `npm run role:discovery` dan sudah mengizinkan port di firewall-nya.');
+      console.log('   - Gunakan IP LAN host (bukan localhost) bila discovery berada di device lain — lihat banner host.');
+      console.log('   - Pastikan satu jaringan: `ping <IP_HOST>` dan SSID yang sama.');
       if (opts.discoveryUrl || !interactive) {
-        throw new Error(`URL Discovery Platform (${discoveryUrl}) tidak bisa dipakai: ${problem}`);
+        throw new Error(
+          `URL Discovery Platform (${discoveryUrl}) tidak bisa dipakai: ${problem}. ` +
+            'Pastikan host menjalankan `npm run role:discovery` dan firewall-nya mengizinkan port tersebut.'
+        );
       }
       const retry = (await prompter.ask('  URL baru (ketik "batal" untuk membatalkan): ')).trim();
       if (retry.toLowerCase() === 'batal') throw new Error('Setup dibatalkan.');
@@ -84,39 +91,26 @@ export async function runWizard(opts: WizardOptions): Promise<WizardResult> {
     }
     console.log(`  Discovery Platform OK: ${discoveryUrl}`);
 
-    // 3/4 — Port TCP
-    let listenPort = opts.listenPort ?? existing?.listenPort;
-    if (!listenPort) {
-      if (!interactive) {
-        throw new Error('Port TCP belum diisi — tambahkan --port <n> (default 5000).');
-      }
-      const raw = await prompter.askDefault('3/4 Port TCP untuk menerima koneksi', '5000');
-      listenPort = Number(raw);
-    }
+    // Port TCP — otomatis (default 5000; override dengan --port)
+    const listenPort = opts.listenPort ?? existing?.listenPort ?? 5000;
     if (!Number.isInteger(listenPort) || listenPort <= 0 || listenPort > 65535) {
       throw new Error(`Port TCP tidak valid (1-65535): ${listenPort}`);
     }
+    console.log(`  Port TCP: ${listenPort} (otomatis — ubah dengan --port)`);
 
-    // 4/4 — Solid Pod (opsional; pod lokal otomatis disiapkan)
+    // Solid Pod — otomatis aktif (default: Pod lokal di http://localhost:3000/<nama>/)
     let pod: PodSettings;
     if (opts.podDisabled) {
       pod = { enabled: false };
+      console.log('  Solid Pod: nonaktif (--no-pod) — history tidak disimpan.');
     } else if (opts.podUrl) {
       pod = { enabled: true, podUrl: opts.podUrl };
     } else if (existing?.pod && !opts.reconfigure) {
       pod = existing.pod;
-    } else if (!interactive) {
-      pod = { enabled: false };
-      console.log('  (non-interaktif: Pod dinonaktifkan — gunakan --pod <url> untuk mengaktifkan)');
     } else {
-      const wantsPod = await prompter.askYesNo('4/4 Aktifkan riwayat chat di Solid Pod?');
-      if (wantsPod) {
-        const defaultPod = `http://localhost:3000/${podNameFromDisplayName(displayName)}/`;
-        const podUrlInput = normalizeUrl(await prompter.askDefault('  URL Pod', defaultPod));
-        pod = { enabled: true, podUrl: podUrlInput };
-      } else {
-        pod = { enabled: false };
-      }
+      const defaultPod = `http://localhost:3000/${podNameFromDisplayName(displayName)}/`;
+      pod = { enabled: true, podUrl: defaultPod };
+      console.log(`  Solid Pod: otomatis (${defaultPod}) — gunakan --no-pod untuk menonaktifkan.`);
     }
 
     // Pod lokal (localhost): siapkan CSS + provisioning akun otomatis.

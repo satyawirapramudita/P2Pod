@@ -1,5 +1,6 @@
 // packages/discovery-platform/src/index.ts
 
+import * as os from 'os';
 import express from 'express';
 import type { OnlinePeer } from '@p2pod/shared';
 
@@ -150,7 +151,43 @@ const reaper = setInterval(() => {
 }, CLEANUP_INTERVAL_MS);
 reaper.unref();
 
+function lanAddresses(): Array<{ name: string; ip: string }> {
+  const candidates: Array<{ name: string; ip: string }> = [];
+  for (const [name, addresses] of Object.entries(os.networkInterfaces())) {
+    for (const address of addresses ?? []) {
+      const isIpv4 = address.family === 'IPv4' || (address.family as unknown) === 4;
+      if (isIpv4 && !address.internal) {
+        candidates.push({ name, ip: address.address });
+      }
+    }
+  }
+  // Prioritaskan Wi-Fi/Ethernet agar URL yang paling relevan tampil lebih dulu.
+  const rank = (name: string): number => (/wi-?fi|wlan|wireless|ethernet|en\d|eth\d/i.test(name) ? 0 : 1);
+  candidates.sort((a, b) => rank(a.name) - rank(b.name));
+  return candidates;
+}
+
 const port = process.env.PORT ? Number(process.env.PORT) : Number(process.argv[2] ?? DEFAULT_PORT);
 app.listen(port, '0.0.0.0', () => {
   console.log(`[discovery] listening on 0.0.0.0:${port} (TTL peer: ${PEER_TTL_MS / 1000}s)`);
+
+  const lans = lanAddresses();
+  console.log('');
+  if (lans.length > 0) {
+    console.log('[discovery] Bagikan URL ini ke user lain di jaringan yang sama:');
+    for (const { name, ip } of lans) {
+      console.log(`  http://${ip}:${port}/   (${name})`);
+    }
+  } else {
+    console.log('[discovery] Tidak ada alamat LAN terdeteksi — cek koneksi jaringan.');
+  }
+
+  if (process.platform === 'win32') {
+    console.log('');
+    console.log('[discovery] Jika device lain tidak bisa connect, izinkan port di Windows Firewall');
+    console.log('[discovery] (sekali saja, jalankan di PowerShell sebagai Administrator):');
+    console.log(
+      `  New-NetFirewallRule -DisplayName "P2Pod Discovery ${port}" -Direction Inbound -Protocol TCP -LocalPort ${port} -Action Allow`
+    );
+  }
 });

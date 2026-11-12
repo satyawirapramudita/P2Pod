@@ -113,6 +113,7 @@ function parseArgs(argv: string[]): CliOptions {
 function printUsage(): void {
   console.log('Usage:');
   console.log('  Setup user     : npm run role:user [-- --name <nama> --discovery <url> [--pod <url> | --no-pod]]');
+  console.log('                   (cukup isi nama + URL discovery — port & Pod lokal disiapkan otomatis)');
   console.log('  Tunggu koneksi : npm start -- --listen [--port 5000] [--pod <pod-url>] [--discovery <url>] [--home <dir>] [--name <nama>]');
   console.log('  Hubungi user   : npm run user:connect -- <nama|PeerID> [--peer-ip <ip> --peer-port <n>]');
   console.log('  Daftar user    : npm run user:list [--discovery <url>]');
