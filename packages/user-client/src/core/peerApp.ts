@@ -73,8 +73,12 @@ export class PeerApp {
     const boundPort = await this.tcpManager.listen(this.listenPort, (conn) => this.handleIncoming(conn));
     this.ui.printSystem(`Mendengarkan koneksi TCP di port ${boundPort}.`);
 
-    await this.discovery.register(this.identity.peerId, boundPort, this.targetPeerId ?? undefined);
-    this.discovery.startHeartbeat(this.identity.peerId, boundPort, this.targetPeerId ?? undefined);
+    const registerOpts = {
+      targetPeerId: this.targetPeerId ?? undefined,
+      displayName: this.identity.displayName,
+    };
+    await this.discovery.register(this.identity.peerId, boundPort, registerOpts);
+    this.discovery.startHeartbeat(this.identity.peerId, boundPort, registerOpts);
     this.ui.printSystem('Terdaftar di Discovery Platform (urutan start bebas).');
     this.ui.printSystem('Peer ID Anda (bisa diberikan ke peer mana pun):');
     console.log(`  ${this.identity.peerId}`);

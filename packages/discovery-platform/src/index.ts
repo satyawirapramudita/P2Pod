@@ -1,9 +1,11 @@
-// server/discovery-server/src/index.ts
+// packages/discovery-platform/src/index.ts
 
 import express from 'express';
+import type { OnlinePeer } from '@p2pod/shared';
 
 interface PeerRecord {
   peerId: string;
+  displayName?: string;
   ip: string;
   port: number;
   lastSeen: number;
@@ -37,9 +39,10 @@ function short(peerId: string): string {
 }
 
 app.post('/register', (req, res) => {
-  const { peerId, port, targetPeerId, ip: claimedIpRaw } = (req.body ?? {}) as {
+  const { peerId, port, displayName: displayNameRaw, targetPeerId, ip: claimedIpRaw } = (req.body ?? {}) as {
     peerId?: unknown;
     port?: unknown;
+    displayName?: unknown;
     targetPeerId?: unknown;
     ip?: unknown;
   };
@@ -57,10 +60,19 @@ app.post('/register', (req, res) => {
     res.status(400).json({ error: 'targetPeerId harus string bila diisi' });
     return;
   }
+  if (displayNameRaw !== undefined && displayNameRaw !== null && typeof displayNameRaw !== 'string') {
+    res.status(400).json({ error: 'displayName harus string bila diisi' });
+    return;
+  }
   if (claimedIpRaw !== undefined && claimedIpRaw !== null && typeof claimedIpRaw !== 'string') {
     res.status(400).json({ error: 'ip harus string bila diisi' });
     return;
   }
+
+  const displayName =
+    typeof displayNameRaw === 'string' && displayNameRaw.trim().length > 0
+      ? displayNameRaw.trim().slice(0, 48)
+      : undefined;
 
   const remoteIp = normalizeIp(req.socket.remoteAddress);
   const claimedIp = typeof claimedIpRaw === 'string' && isPlausibleIpv4(claimedIpRaw) ? claimedIpRaw : undefined;
@@ -74,6 +86,7 @@ app.post('/register', (req, res) => {
   const target = typeof targetPeerId === 'string' && targetPeerId.length > 0 ? targetPeerId : undefined;
   const record: PeerRecord = {
     peerId,
+    displayName,
     ip: effectiveIp,
     port: portNum,
     lastSeen: Date.now(),
@@ -81,7 +94,7 @@ app.post('/register', (req, res) => {
   };
   peers.set(peerId, record);
   console.log(
-    `[discovery] register ${short(peerId)} -> ${record.ip}:${record.port}` +
+    `[discovery] register ${short(peerId)}${record.displayName ? ` (${record.displayName})` : ''} -> ${record.ip}:${record.port}` +
       `${useClaimed ? ' (loopback→klaim klien)' : ''}` +
       `${target ? ` (target: ${short(target)})` : ''} (peer aktif: ${peers.size})`
   );
@@ -95,6 +108,20 @@ app.get('/lookup/:peerId', (req, res) => {
     return;
   }
   res.json({ peerId: record.peerId, ip: record.ip, port: record.port, targetPeerId: record.targetPeerId });
+});
+
+app.get('/peers', (_req, res) => {
+  const list: OnlinePeer[] = [...peers.values()]
+    .map((record) => ({
+      peerId: record.peerId,
+      displayName: record.displayName,
+      lastSeen: record.lastSeen,
+    }))
+    .sort(
+      (a, b) =>
+        (a.displayName ?? '').localeCompare(b.displayName ?? '') || a.peerId.localeCompare(b.peerId)
+    );
+  res.json({ peers: list });
 });
 
 app.post('/unregister', (req, res) => {

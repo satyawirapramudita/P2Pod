@@ -1,8 +1,13 @@
-// src/discovery/discoveryClient.ts
+// packages/user-client/src/discovery/discoveryClient.ts
 
 import * as dgram from 'dgram';
 import * as os from 'os';
-import type { PeerEndpoint } from '@p2pod/shared';
+import type { OnlinePeer, PeerEndpoint } from '@p2pod/shared';
+
+export interface RegisterOptions {
+  targetPeerId?: string;
+  displayName?: string;
+}
 
 export function isValidIpv4(ip: string): boolean {
   const parts = ip.split('.');
@@ -90,9 +95,15 @@ export class DiscoveryClient {
 
   constructor(private readonly baseUrl: string) {}
 
-  async register(peerId: string, port: number, targetPeerId?: string): Promise<void> {
+  async register(peerId: string, port: number, opts: RegisterOptions = {}): Promise<void> {
     const ip = await this.detectIp();
-    await this.request('POST', '/register', { peerId, port, targetPeerId, ip: ip || undefined });
+    await this.request('POST', '/register', {
+      peerId,
+      port,
+      targetPeerId: opts.targetPeerId,
+      displayName: opts.displayName,
+      ip: ip || undefined,
+    });
   }
 
   async lookup(peerId: string): Promise<PeerEndpoint> {
@@ -100,14 +111,20 @@ export class DiscoveryClient {
     return result;
   }
 
+  /** Daftar user yang sedang online di Discovery Platform. */
+  async listPeers(): Promise<OnlinePeer[]> {
+    const result = (await this.request('GET', '/peers')) as { peers: OnlinePeer[] };
+    return result.peers;
+  }
+
   async unregister(peerId: string): Promise<void> {
     await this.request('POST', '/unregister', { peerId });
   }
 
-  startHeartbeat(peerId: string, port: number, targetPeerId?: string, intervalMs = 20_000): void {
+  startHeartbeat(peerId: string, port: number, opts: RegisterOptions = {}, intervalMs = 20_000): void {
     this.stopHeartbeat();
     this.heartbeat = setInterval(() => {
-      this.register(peerId, port, targetPeerId).catch(() => {
+      this.register(peerId, port, opts).catch(() => {
         // diamkan — heartbeat berikutnya akan mencoba lagi
       });
     }, intervalMs);

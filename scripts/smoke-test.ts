@@ -145,6 +145,21 @@ async function phase0(): Promise<void> {
   } else {
     console.log('  SKIP  uji remote (mesin ini tidak punya IP LAN)');
   }
+
+  // C. displayName + daftar user online (GET /peers)
+  const listPeers = async (): Promise<Array<{ peerId: string; displayName?: string }>> =>
+    ((await (await fetch(`${base}/peers`)).json()) as { peers: Array<{ peerId: string; displayName?: string }> })
+      .peers;
+
+  await post(`${base}/register`, { peerId: 'test-named', port: 1234, displayName: 'Rani' });
+  const afterRegister = await listPeers();
+  assert(
+    afterRegister.some((peer) => peer.peerId === 'test-named' && peer.displayName === 'Rani'),
+    'GET /peers memuat user + displayName'
+  );
+  await post(`${base}/unregister`, { peerId: 'test-named' });
+  const afterUnregister = await listPeers();
+  assert(!afterUnregister.some((peer) => peer.peerId === 'test-named'), 'user yang unregister hilang dari /peers');
 }
 
 async function phase1(): Promise<string> {

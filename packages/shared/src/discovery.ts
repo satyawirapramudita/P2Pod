@@ -7,3 +7,23 @@ export interface PeerEndpoint {
   port: number;
   targetPeerId?: string;
 }
+
+/** Payload POST /register. */
+export interface RegisterRequest {
+  peerId: string;
+  port: number;
+  displayName?: string;
+  targetPeerId?: string;
+  ip?: string;
+}
+
+/** Item daftar user online (GET /peers). */
+export interface OnlinePeer {
+  peerId: string;
+  displayName?: string;
+  lastSeen: number;
+}
+
+export interface PeersResponse {
+  peers: OnlinePeer[];
+}
