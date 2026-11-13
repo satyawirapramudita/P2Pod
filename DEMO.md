@@ -211,6 +211,14 @@ list                        tampilkan user yang sedang online (one-shot, tanpa m
 /quit                       akhiri sesi & simpan history (jika Pod aktif)
 ```
 
+**Kelola user (device ini):**
+
+```
+user:profiles               daftar user (profil) di device ini
+user:edit                   ubah info user (--name / --discovery / --port / --pod <url> / --no-pod)
+user:remove                 hapus user dari device ini (konfirmasi ketik nama, atau --yes)
+```
+
 Semua flag juga menerima bentuk `--flag=value` (mis. `--port=5001`); `--help` menampilkan bantuan. Untuk jalur modular lengkap (host Discovery + wizard user + `user:list` + `user:connect` + `pod:stop`), lihat [README.md](README.md).
 
 ---
@@ -340,6 +348,7 @@ Halaman ini untuk mengelola akun: pod, login, dan **client credentials** (sumber
 | ⚠ `Solid Pod tidak aktif: Konfigurasi Pod tidak ditemukan` saat start | Bukan lagi crash — chat tetap jalan tanpa history. Jalankan `npm run setup:pod:alice` / `setup:pod:bob`, atau (jalur wizard) `npm run role:user -- --reconfigure` agar Pod lokal disiapkan otomatis |
 | ⚠ `Solid Pod tidak terjangkau` saat start | CSS Pod tidak jalan — jalankan `npm run css:alice`/`css:bob` (atau biarkan wizard user menyalakannya), lalu restart aplikasi. Chat tetap bisa tanpa Pod, tetapi history tidak disimpan |
 | ⚠ `Setup Pod otomatis gagal` saat `role:user` | CSS tidak bisa disiapkan otomatis (port terpakai / kredensial lama). Coba lagi: `npm run role:user -- --reconfigure`, atau jalankan tanpa Pod: tambahkan `--no-pod` |
+| Pod `(nonaktif)` setelah init dengan `--no-pod` | Aktifkan kembali: `npm run user:edit -- --pod http://localhost:3000/<nama>/` (otomatis menyiapkan CSS + provisioning). Atau jalankan `npm run role:user` lagi dan jawab **y** saat ditawari |
 | Pod lokal tidak bisa dihentikan | `npm run pod:stop` (semua) atau `npm run pod:stop -- --name <nama>`; data tetap tersimpan di `.css/<nama>/` |
 | `Login ke Solid Pod gagal` | CSS harus berjalan; jalankan ulang `setup:pod` |
 | Port bentrok (`EADDRINUSE`) | Di satu mesin beri `--port` berbeda tiap peer (alice 5000, bob 5001) atau hentikan proses lama (`taskkill /PID <pid> /T /F`) |

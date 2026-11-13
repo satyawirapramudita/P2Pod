@@ -11,8 +11,14 @@ const ALICE_TCP_PORT = 5700;
 const BOB_TCP_PORT = 5701;
 const ALICE_HOME = '.p2pod/e2e-alice';
 const BOB_HOME = '.p2pod/e2e-bob';
-const ALICE_CSS = 'http://localhost:3000/';
-const BOB_CSS = 'http://localhost:3001/';
+// Port CSS bisa dioverride via env agar tes bisa jalan tanpa mengganggu sesi demo yang aktif.
+const ALICE_CSS_PORT = Number(process.env.E2E_ALICE_CSS_PORT ?? 3000);
+const BOB_CSS_PORT = Number(process.env.E2E_BOB_CSS_PORT ?? 3001);
+const ALICE_CSS = `http://localhost:${ALICE_CSS_PORT}/`;
+const BOB_CSS = `http://localhost:${BOB_CSS_PORT}/`;
+// Data CSS default (.css/alice|bob) dipakai di port default; port custom memakai data khusus e2e.
+const ALICE_CSS_DATA = ALICE_CSS_PORT === 3000 ? '.css/alice' : '.css/e2e-alice';
+const BOB_CSS_DATA = BOB_CSS_PORT === 3001 ? '.css/bob' : '.css/e2e-bob';
 const ALICE_POD = `${ALICE_CSS}alice/`;
 const BOB_POD = `${BOB_CSS}bob/`;
 
@@ -105,14 +111,41 @@ async function isReachable(url: string): Promise<boolean> {
   }
 }
 
-async function ensureCss(name: string, port: number, npmScript: string): Promise<void> {
+function resolveCssServerJs(): string {
+  const packageJsonPath = require.resolve('@solid/community-server/package.json');
+  const pkg = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8')) as {
+    bin?: Record<string, string> | string;
+  };
+  const binRel = typeof pkg.bin === 'string' ? pkg.bin : pkg.bin?.['community-solid-server'];
+  if (!binRel) throw new Error('bin community-solid-server tidak ditemukan');
+  return path.join(path.dirname(packageJsonPath), binRel);
+}
+
+async function ensureCss(name: string, port: number, dataDir: string): Promise<void> {
   if (await isReachable(`http://localhost:${port}/.account/`)) {
     console.log(`[css-${name}] sudah berjalan di port ${port}`);
     return;
   }
 
   console.log(`[css-${name}] starting di port ${port}...`);
-  const proc = start(`css-${name}`, 'npm', ['run', npmScript], false);
+  const proc = start(
+    `css-${name}`,
+    'node',
+    [
+      `"${resolveCssServerJs()}"`,
+      '-c',
+      '@css:config/file.json',
+      '-f',
+      dataDir,
+      '-p',
+      String(port),
+      '-b',
+      `http://localhost:${port}/`,
+      '--seedConfig',
+      path.join('css', `seed-${name}.json`),
+    ],
+    false
+  );
   startedCss.push(proc);
 
   const startedAt = Date.now();
@@ -196,6 +229,7 @@ async function runSession(round: number): Promise<void> {
 
 async function main(): Promise<void> {
   console.log('--- E2E test P2Pod + Solid Pod ---\n');
+  console.log(`CSS: alice=${ALICE_CSS} bob=${BOB_CSS} · discovery=:${DISCOVERY_PORT}\n`);
 
   const t0 = Date.now();
 
@@ -205,8 +239,8 @@ async function main(): Promise<void> {
     fs.rmSync(path.join(ROOT, dir), { recursive: true, force: true });
   }
 
-  await ensureCss('alice', 3000, 'css:alice');
-  await ensureCss('bob', 3001, 'css:bob');
+  await ensureCss('alice', ALICE_CSS_PORT, ALICE_CSS_DATA);
+  await ensureCss('bob', BOB_CSS_PORT, BOB_CSS_DATA);
   await provision('alice', ALICE_CSS, 'alice@example.com', ALICE_HOME);
   await provision('bob', BOB_CSS, 'bob@example.com', BOB_HOME);
 

@@ -78,6 +78,23 @@ npm run user:connect -- alice                # hubungi user berdasarkan nama
 npm run user:connect -- MCowBQYDK2VwAyEA...  # atau berdasarkan Peer ID
 ```
 
+### Kelola user di device ini
+
+| Perintah | Fungsi |
+|---|---|
+| `npm run user:profiles` | Daftar user (profil) yang ada di device ini: nama, Peer ID, discovery, status pod, path |
+| `npm run user:edit` | Ubah info user: `--name <baru>`, `--discovery <url>`, `--port <n>`, `--pod <url>` (aktifkan pod), `--no-pod` (nonaktifkan). Tanpa flag → mode terbimbing |
+| `npm run user:remove` | Hapus user dari device ini — konfirmasi dengan mengetik nama, atau `--yes` |
+
+```bash
+npm run user:profiles
+npm run user:edit -- --home .p2pod/alice --name alice-baru
+npm run user:edit -- --pod http://localhost:3000/alice/   # aktifkan Pod kembali
+npm run user:remove -- --home .p2pod/alice
+```
+
+> `--home` opsional: bila tidak diisi dan ada beberapa user, muncul pilihan interaktif (non-interaktif: error yang menyebutkan path — gunakan `--home`).
+
 ---
 
 ## Informasi yang Dibutuhkan
@@ -116,10 +133,13 @@ css/                     # seed demo alice/bob
 
 ```bash
 npm run typecheck
-npm run test:smoke    # 5 fase: discovery, dual-role, /connect by name, user:list, init
+npm run test:smoke    # 5 fase: discovery, dual-role, /connect by name, user:list, init, kelola user
 npm run test:e2e      # end-to-end dengan Pod (CSS)
 npm run test:pod -- --home .p2pod/alice   # round-trip JSON-LD
 ```
+
+> `test:e2e` memakai CSS di port 3000/3001. Bila port itu sedang terpakai (mis. sesi demo aktif), jalankan dengan port lain:
+> `E2E_ALICE_CSS_PORT=3110 E2E_BOB_CSS_PORT=3111 npm run test:e2e` (PowerShell: `$env:E2E_ALICE_CSS_PORT='3110'; $env:E2E_BOB_CSS_PORT='3111'; npm run test:e2e`).
 
 ## Mode Demo (alice/bob di 1 mesin)
 

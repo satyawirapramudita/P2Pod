@@ -5,6 +5,7 @@
 //   Fase 2: urutan dibalik — connector start lebih dulu, retry sampai listener online
 //   Fase 3: kedua sisi saling --connect (tie-break: hanya satu sesi terbentuk)
 //   Fase 4: /connect by name (runtime) + user:list + init non-interaktif
+//   Fase 5: kelola user lokal (user:profiles / user:edit / user:remove)
 
 import { ChildProcessWithoutNullStreams, execFileSync, spawn } from 'child_process';
 import * as fs from 'fs';
@@ -349,6 +350,65 @@ async function phase4(): Promise<void> {
   assert(carolCode === 0, `init app exit code 0 (dapat ${carolCode})`);
 }
 
+async function phase5(): Promise<void> {
+  console.log('\n=== Fase 5: user:profiles / user:edit / user:remove ===\n');
+
+  // Profil carol (dibuat Fase 4) harus tampil di daftar user device ini
+  const profilesProc = start('profiles1', 'npx', ['ts-node', 'packages/user-client/src/main.ts', 'profiles']);
+  await waitFor(profilesProc, /test-carol/);
+  const profilesCode = await waitExit(profilesProc);
+  assert(profilesCode === 0, `user:profiles exit 0 (dapat ${profilesCode})`);
+  assert(profilesProc.output.includes('carol'), 'profiles menampilkan nama carol');
+
+  // Edit nama user
+  const editProc = start('edit', 'npx', [
+    'ts-node',
+    'packages/user-client/src/main.ts',
+    'edit',
+    '--home',
+    '.p2pod/test-carol',
+    '--name',
+    'caroline',
+  ]);
+  const editCode = await waitExit(editProc);
+  assert(editCode === 0, `user:edit exit 0 (dapat ${editCode})`);
+  const editedConfig = JSON.parse(
+    fs.readFileSync(path.join(ROOT, '.p2pod', 'test-carol', 'config.json'), 'utf8')
+  ) as { displayName: string };
+  assert(editedConfig.displayName === 'caroline', 'edit mengubah displayName di config.json');
+
+  // Remove tanpa --yes (non-interaktif) harus gagal dengan aman & tidak menghapus
+  const removeNoYes = start('remove-no-yes', 'npx', [
+    'ts-node',
+    'packages/user-client/src/main.ts',
+    'remove',
+    '--home',
+    '.p2pod/test-carol',
+  ]);
+  const noYesCode = await waitExit(removeNoYes);
+  assert(noYesCode !== 0, 'remove tanpa --yes (non-interaktif) gagal dengan aman');
+  assert(fs.existsSync(path.join(ROOT, '.p2pod', 'test-carol')), 'home tetap ada setelah penolakan konfirmasi');
+
+  // Remove dengan --yes
+  const removeProc = start('remove', 'npx', [
+    'ts-node',
+    'packages/user-client/src/main.ts',
+    'remove',
+    '--home',
+    '.p2pod/test-carol',
+    '--yes',
+  ]);
+  const removeCode = await waitExit(removeProc);
+  assert(removeCode === 0, `user:remove --yes exit 0 (dapat ${removeCode})`);
+  assert(!fs.existsSync(path.join(ROOT, '.p2pod', 'test-carol')), 'home test-carol terhapus');
+
+  // Konfirmasi hilang dari daftar
+  const profilesProc2 = start('profiles2', 'npx', ['ts-node', 'packages/user-client/src/main.ts', 'profiles']);
+  const profilesCode2 = await waitExit(profilesProc2);
+  assert(profilesCode2 === 0, `user:profiles #2 exit 0 (dapat ${profilesCode2})`);
+  assert(!profilesProc2.output.includes('test-carol'), 'profiles tidak lagi menampilkan carol');
+}
+
 async function main(): Promise<void> {
   console.log('--- Smoke test P2Pod (tanpa Pod) ---');
   const t0 = Date.now();
@@ -366,6 +426,7 @@ async function main(): Promise<void> {
   await phase2(alicePeerId);
   await phase3(alicePeerId, bobPeerId);
   await phase4();
+  await phase5();
 
   console.log('\n--- Hasil akhir ---');
   const health = (await (await fetch(`http://localhost:${DISCOVERY_PORT}/health`)).json()) as { peers: number };

@@ -22,12 +22,12 @@ export interface WizardResult {
   config: UserConfig;
 }
 
-function normalizeUrl(raw: string): string {
+export function normalizeUrl(raw: string): string {
   const trimmed = raw.trim();
   return /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
 }
 
-async function checkDiscovery(url: string): Promise<string | null> {
+export async function checkDiscovery(url: string): Promise<string | null> {
   try {
     const healthUrl = new URL('health', url.endsWith('/') ? url : `${url}/`).toString();
     const response = await fetch(healthUrl, { signal: AbortSignal.timeout(5000) });
@@ -106,7 +106,24 @@ export async function runWizard(opts: WizardOptions): Promise<WizardResult> {
     } else if (opts.podUrl) {
       pod = { enabled: true, podUrl: opts.podUrl };
     } else if (existing?.pod && !opts.reconfigure) {
-      pod = existing.pod;
+      if (existing.pod.enabled) {
+        pod = existing.pod;
+      } else if (interactive) {
+        const enablePod = await prompter.askYesNo('  Solid Pod saat ini nonaktif. Aktifkan sekarang?');
+        if (enablePod) {
+          const defaultPod = `http://localhost:3000/${podNameFromDisplayName(displayName)}/`;
+          pod = { enabled: true, podUrl: defaultPod };
+          console.log(`  Solid Pod: otomatis (${defaultPod}).`);
+        } else {
+          pod = existing.pod;
+          console.log('  Solid Pod: tetap nonaktif — aktifkan kapan saja dengan: npm run user:edit -- --pod <url>');
+        }
+      } else {
+        pod = existing.pod;
+        console.log(
+          '  Solid Pod: nonaktif (dari config tersimpan) — aktifkan dengan: npm run user:edit -- --pod <url>'
+        );
+      }
     } else {
       const defaultPod = `http://localhost:3000/${podNameFromDisplayName(displayName)}/`;
       pod = { enabled: true, podUrl: defaultPod };
@@ -161,7 +178,11 @@ export async function runWizard(opts: WizardOptions): Promise<WizardResult> {
     console.log(`  Peer ID   : ${identity.peerId}`);
     console.log(`  Discovery : ${config.discoveryUrl}`);
     console.log(`  Port TCP  : ${config.listenPort}`);
-    console.log(`  Pod       : ${config.pod.enabled ? config.pod.podUrl : '(nonaktif)'}`);
+    console.log(
+      `  Pod       : ${
+        config.pod.enabled ? config.pod.podUrl : '(nonaktif — aktifkan: npm run user:edit -- --pod <url>)'
+      }`
+    );
     console.log('');
 
     return { identity, config };

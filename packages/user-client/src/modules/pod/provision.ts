@@ -164,7 +164,8 @@ export async function ensureLocalCssRunning(opts: { cssPort: number; name: strin
 }
 
 async function fetchJson(url: string, headers?: Record<string, string>): Promise<any> {
-  const response = await fetch(url, { headers, signal: AbortSignal.timeout(10_000) });
+  // Timeout longgar: request pertama ke CSS yang baru boot bisa lambat (account index).
+  const response = await fetch(url, { headers, signal: AbortSignal.timeout(30_000) });
   if (!response.ok) {
     throw new Error(`GET ${url} gagal (HTTP ${response.status})`);
   }
@@ -196,7 +197,7 @@ export async function provisionPodAccount(opts: {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ email: opts.email, password: opts.password }),
-    signal: AbortSignal.timeout(10_000),
+    signal: AbortSignal.timeout(30_000),
   });
   if (!loginResponse.ok) {
     throw new Error(`Login ke CSS gagal (HTTP ${loginResponse.status}) — cek email/password`);
@@ -224,7 +225,7 @@ export async function provisionPodAccount(opts: {
       'content-type': 'application/json',
     },
     body: JSON.stringify({ name: `p2pod-${opts.podName}`, webId }),
-    signal: AbortSignal.timeout(10_000),
+    signal: AbortSignal.timeout(30_000),
   });
   if (!createResponse.ok) {
     const body = await createResponse.text().catch(() => '');
@@ -253,6 +254,26 @@ export async function provisionPodAccount(opts: {
 }
 
 /**
+ * Provisioning dengan satu percobaan ulang: CSS yang baru cold-start kadang lambat
+ * merespons request pertama, sehingga percobaan pertama bisa timeout.
+ */
+async function provisionWithRetry(
+  opts: Parameters<typeof provisionPodAccount>[0],
+  attempts = 2
+): Promise<PodAccountResult> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await provisionPodAccount(opts);
+    } catch (err) {
+      lastError = err;
+      if (attempt < attempts) await delay(2000);
+    }
+  }
+  throw lastError;
+}
+
+/**
  * Setup Pod lokal lengkap: seed → pastikan CSS jalan → provisioning akun (lewati bila
  * pod-config.json sudah ada).
  */
@@ -276,7 +297,7 @@ export async function setupLocalPod(opts: {
     return { podUrl: normalizedPodUrl, provisioned: false };
   }
 
-  const result = await provisionPodAccount({
+  const result = await provisionWithRetry({
     cssUrl,
     email: opts.email,
     password: effectivePassword,

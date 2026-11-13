@@ -7,9 +7,10 @@ import { DiscoveryClient, detectLocalIp, isValidIpv4 } from './discovery/discove
 import { loadConfig, UserConfig } from './config';
 import { runWizard } from './wizard';
 import { resolveTarget } from './targetResolver';
+import { runEdit, runProfiles, runRemove } from './profiles';
 
 interface CliOptions {
-  command: 'init' | 'listen' | 'connect' | 'list' | 'none';
+  command: 'init' | 'listen' | 'connect' | 'list' | 'profiles' | 'edit' | 'remove' | 'none';
   connectTarget?: string;
   peerIp?: string;
   peerPort?: number;
@@ -18,17 +19,21 @@ interface CliOptions {
   podDisabled: boolean;
   discoveryUrl?: string;
   homeDir: string;
+  homeExplicit: boolean;
   displayName?: string;
   reconfigure: boolean;
+  yes: boolean;
 }
 
-const COMMANDS = new Set(['init', 'listen', 'connect', 'list']);
+const COMMANDS = new Set(['init', 'listen', 'connect', 'list', 'profiles', 'edit', 'remove']);
 
 function parseArgs(argv: string[]): CliOptions {
   const opts: CliOptions = {
     command: 'none',
     podDisabled: false,
     reconfigure: false,
+    yes: false,
+    homeExplicit: false,
     homeDir: defaultHomeDir(),
   };
 
@@ -85,12 +90,16 @@ function parseArgs(argv: string[]): CliOptions {
         break;
       case '--home':
         opts.homeDir = path.resolve(value());
+        opts.homeExplicit = true;
         break;
       case '--name':
         opts.displayName = value();
         break;
       case '--reconfigure':
         opts.reconfigure = true;
+        break;
+      case '--yes':
+        opts.yes = true;
         break;
       case '--help':
         printUsage();
@@ -116,7 +125,10 @@ function printUsage(): void {
   console.log('                   (cukup isi nama + URL discovery — port & Pod lokal disiapkan otomatis)');
   console.log('  Tunggu koneksi : npm start -- --listen [--port 5000] [--pod <pod-url>] [--discovery <url>] [--home <dir>] [--name <nama>]');
   console.log('  Hubungi user   : npm run user:connect -- <nama|PeerID> [--peer-ip <ip> --peer-port <n>]');
-  console.log('  Daftar user    : npm run user:list [--discovery <url>]');
+  console.log('  User online    : npm run user:list [--discovery <url>]');
+  console.log('  User di device : npm run user:profiles | user:edit | user:remove');
+  console.log('                   contoh: user:edit -- --home <path> --name <baru> --pod <url> | --no-pod');
+  console.log('                           user:remove -- --home <path> [--yes]');
   console.log('  Di sesi chat   : /connect <nama|PeerID> · /connect <IP> <PeerID> · /list · /help · /quit');
 }
 
@@ -217,6 +229,31 @@ async function main(): Promise<void> {
   if (opts.command === 'list') {
     const discoveryUrl = opts.discoveryUrl ?? loadConfig(opts.homeDir)?.discoveryUrl ?? 'http://localhost:4000';
     await runList(discoveryUrl);
+    return;
+  }
+
+  if (opts.command === 'profiles') {
+    runProfiles(opts.homeExplicit ? opts.homeDir : undefined);
+    return;
+  }
+
+  if (opts.command === 'edit') {
+    await runEdit({
+      homeDir: opts.homeExplicit ? opts.homeDir : undefined,
+      name: opts.displayName,
+      discoveryUrl: opts.discoveryUrl,
+      listenPort: opts.port,
+      podUrl: opts.podUrl,
+      podDisabled: opts.podDisabled,
+    });
+    return;
+  }
+
+  if (opts.command === 'remove') {
+    await runRemove({
+      homeDir: opts.homeExplicit ? opts.homeDir : undefined,
+      yes: opts.yes,
+    });
     return;
   }
 
