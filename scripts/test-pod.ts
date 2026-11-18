@@ -4,8 +4,9 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { defaultHomeDir } from '../packages/user-client/src/identity/identity';
+import { defaultHomeDir, Identity } from '../packages/user-client/src/identity/identity';
 import { SolidClient } from '../packages/user-client/src/modules/pod/solidClient';
+import { ensureLocalCssRunning, localCssPortOf, podNameFromUrl } from '../packages/user-client/src/modules/pod/provision';
 
 interface Options {
   home: string;
@@ -50,8 +51,20 @@ async function main(): Promise<void> {
   console.log(`[test-pod] pod : ${podUrl}`);
 
   const client = new SolidClient(opts.home, podUrl);
+  const cssPort = localCssPortOf(podUrl);
+  if (cssPort) {
+    await ensureLocalCssRunning({ cssPort, name: podNameFromUrl(podUrl, 'alice') });
+  }
   await client.login();
   console.log('[test-pod] login ke Pod: OK');
+
+  const identity = Identity.loadOrCreate(opts.home);
+  const linkedDoc = await client.linkIdentity(identity);
+  const loadedLink = await client.loadIdentityLink();
+  if (!loadedLink || loadedLink.identifier !== identity.peerId) {
+    throw new Error('Verifikasi identity-link.json di Solid Pod gagal');
+  }
+  console.log(`[test-pod] identity link: OK (${loadedLink['@id']} <-> ${identity.fingerprint})`);
 
   const chatId = crypto.randomBytes(32).toString('hex');
   const now = Date.now();

@@ -13,6 +13,8 @@ export interface HandshakeMessage extends BaseMessage {
   peerId: string;       // base64url — Ed25519 public key (SPKI DER), identitas permanen
   ephemeralKey: string; // base64 — ECDH P-256 ephemeral public key
   fingerprint: string;  // hex pendek dari peerId
+  webId?: string;       // Solid WebID yang tertaut dengan peerId ini (opsional)
+  podUrl?: string;      // URL Solid Pod pengguna (opsional)
 }
 
 export interface IdentityProofMessage extends BaseMessage {

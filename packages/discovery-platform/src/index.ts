@@ -7,6 +7,7 @@ import type { OnlinePeer } from '@p2pod/shared';
 interface PeerRecord {
   peerId: string;
   displayName?: string;
+  webId?: string;
   ip: string;
   port: number;
   lastSeen: number;
@@ -40,12 +41,20 @@ function short(peerId: string): string {
 }
 
 app.post('/register', (req, res) => {
-  const { peerId, port, displayName: displayNameRaw, targetPeerId, ip: claimedIpRaw } = (req.body ?? {}) as {
+  const {
+    peerId,
+    port,
+    displayName: displayNameRaw,
+    targetPeerId,
+    ip: claimedIpRaw,
+    webId: webIdRaw,
+  } = (req.body ?? {}) as {
     peerId?: unknown;
     port?: unknown;
     displayName?: unknown;
     targetPeerId?: unknown;
     ip?: unknown;
+    webId?: unknown;
   };
   const portNum = Number(port);
 
@@ -69,10 +78,18 @@ app.post('/register', (req, res) => {
     res.status(400).json({ error: 'ip harus string bila diisi' });
     return;
   }
+  if (webIdRaw !== undefined && webIdRaw !== null && typeof webIdRaw !== 'string') {
+    res.status(400).json({ error: 'webId harus string bila diisi' });
+    return;
+  }
 
   const displayName =
     typeof displayNameRaw === 'string' && displayNameRaw.trim().length > 0
       ? displayNameRaw.trim().slice(0, 48)
+      : undefined;
+  const webId =
+    typeof webIdRaw === 'string' && webIdRaw.trim().length > 0
+      ? webIdRaw.trim().slice(0, 256)
       : undefined;
 
   const remoteIp = normalizeIp(req.socket.remoteAddress);
@@ -88,6 +105,7 @@ app.post('/register', (req, res) => {
   const record: PeerRecord = {
     peerId,
     displayName,
+    webId,
     ip: effectiveIp,
     port: portNum,
     lastSeen: Date.now(),
@@ -97,6 +115,7 @@ app.post('/register', (req, res) => {
   console.log(
     `[discovery] register ${short(peerId)}${record.displayName ? ` (${record.displayName})` : ''} -> ${record.ip}:${record.port}` +
       `${useClaimed ? ' (loopback→klaim klien)' : ''}` +
+      `${record.webId ? ` [webId: ${record.webId}]` : ''}` +
       `${target ? ` (target: ${short(target)})` : ''} (peer aktif: ${peers.size})`
   );
   res.json({ ok: true, ip: record.ip, port: record.port });
@@ -108,7 +127,13 @@ app.get('/lookup/:peerId', (req, res) => {
     res.status(404).json({ error: 'Peer tidak ditemukan (offline atau belum terdaftar)' });
     return;
   }
-  res.json({ peerId: record.peerId, ip: record.ip, port: record.port, targetPeerId: record.targetPeerId });
+  res.json({
+    peerId: record.peerId,
+    ip: record.ip,
+    port: record.port,
+    targetPeerId: record.targetPeerId,
+    webId: record.webId,
+  });
 });
 
 app.get('/peers', (_req, res) => {
@@ -116,6 +141,7 @@ app.get('/peers', (_req, res) => {
     .map((record) => ({
       peerId: record.peerId,
       displayName: record.displayName,
+      webId: record.webId,
       lastSeen: record.lastSeen,
     }))
     .sort(

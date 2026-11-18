@@ -45,6 +45,7 @@ export function verifyWithPeerId(peerId: string, data: Buffer, signature: Buffer
 
 export class Identity {
   readonly peerId: string;
+  readonly publicKeyPem: string;
   readonly fingerprint: string;
   readonly createdAt: string;
   displayName: string;
@@ -53,6 +54,7 @@ export class Identity {
 
   private constructor(data: IdentityFile) {
     this.peerId = data.peerId;
+    this.publicKeyPem = data.publicKeyPem;
     this.displayName = data.displayName;
     this.createdAt = data.createdAt;
     this.fingerprint = fingerprintOf(data.peerId);
@@ -64,12 +66,18 @@ export class Identity {
     const filePath = path.join(homeDir, 'identity.json');
 
     if (fs.existsSync(filePath)) {
-      const data = JSON.parse(fs.readFileSync(filePath, 'utf8')) as IdentityFile;
-      if (displayName && displayName !== data.displayName) {
-        data.displayName = displayName;
-        fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+      try {
+        const data = JSON.parse(fs.readFileSync(filePath, 'utf8')) as Partial<IdentityFile>;
+        if (data.peerId && data.privateKeyPem && data.publicKeyPem) {
+          if (displayName && displayName !== data.displayName) {
+            data.displayName = displayName;
+            fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+          }
+          return new Identity(data as IdentityFile);
+        }
+      } catch {
+        // file rusak / format lama — buat ulang di bawah
       }
-      return new Identity(data);
     }
 
     const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');

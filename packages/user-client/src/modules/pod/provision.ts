@@ -67,6 +67,40 @@ export async function isHttpReachable(url: string, timeoutMs = 4000): Promise<bo
   }
 }
 
+/** Cek apakah URL tersebut benar-benar Community Solid Server (memiliki endpoint /.account/). */
+export async function isCssServerRunning(baseUrl: string, timeoutMs = 4000): Promise<boolean> {
+  try {
+    const normalized = baseUrl.endsWith('/') ? baseUrl : `${baseUrl}/`;
+    const response = await fetch(`${normalized}.account/`, {
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!response.ok) {
+      await response.text().catch(() => undefined);
+      return false;
+    }
+    const data = (await response.json()) as { controls?: unknown };
+    return Boolean(data && typeof data === 'object' && data.controls);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Pilih port CSS lokal yang bebas bentrok dengan aplikasi lain (mis. Next.js di port 3000).
+ * Jika port pilihan kosong atau sudah menjalankan CSS, pakai port itu; jika dipakai aplikasi
+ * non-CSS, cari port alternatif (3005..3009).
+ */
+export async function pickAvailableCssPort(preferredPort = 3000): Promise<number> {
+  const candidates = [preferredPort, 3005, 3006, 3007, 3008, 3009];
+  for (const port of candidates) {
+    const baseUrl = `http://localhost:${port}/`;
+    if (await isCssServerRunning(baseUrl, 2000)) return port;
+    if (!(await isHttpReachable(baseUrl, 1500))) return port;
+  }
+  return preferredPort;
+}
+
 /** Deteksi pod lokal: http://localhost:<port>/... → kembalikan port CSS-nya; selain itu null. */
 export function localCssPortOf(podUrl: string): number | null {
   try {
@@ -120,7 +154,13 @@ function resolveCssServerJs(): string {
  */
 export async function ensureLocalCssRunning(opts: { cssPort: number; name: string }): Promise<void> {
   const baseUrl = `http://localhost:${opts.cssPort}/`;
-  if (await isHttpReachable(baseUrl)) return;
+  if (await isCssServerRunning(baseUrl)) return;
+  if (await isHttpReachable(baseUrl)) {
+    throw new Error(
+      `Port ${opts.cssPort} sedang dipakai aplikasi lain (bukan Community Solid Server). ` +
+        `Gunakan port lain, mis. --pod http://localhost:3005/${opts.name}/`
+    );
+  }
 
   const cssRoot = path.join(process.cwd(), '.css');
   const dataDir = path.join(cssRoot, opts.name);
@@ -157,7 +197,7 @@ export async function ensureLocalCssRunning(opts: { cssPort: number; name: strin
 
   const startedAt = Date.now();
   while (Date.now() - startedAt < 90_000) {
-    if (await isHttpReachable(baseUrl)) return;
+    if (await isCssServerRunning(baseUrl)) return;
     await delay(1500);
   }
   throw new Error(`CSS tidak siap dalam 90 dtk — lihat log: ${logPath}`);
@@ -294,7 +334,23 @@ export async function setupLocalPod(opts: {
 
   const configPath = path.join(opts.homeDir, 'pod-config.json');
   if (fs.existsSync(configPath)) {
-    return { podUrl: normalizedPodUrl, provisioned: false };
+    try {
+      const existing = JSON.parse(fs.readFileSync(configPath, 'utf8')) as {
+        podUrl?: string;
+        webId?: string;
+        clientId?: string;
+        clientSecret?: string;
+      };
+      if (existing.podUrl === normalizedPodUrl && existing.clientId && existing.clientSecret) {
+        return {
+          podUrl: normalizedPodUrl,
+          webId: existing.webId ?? `${normalizedPodUrl}profile/card#me`,
+          provisioned: false,
+        };
+      }
+    } catch {
+      // file rusak — provision ulang di bawah
+    }
   }
 
   const result = await provisionWithRetry({

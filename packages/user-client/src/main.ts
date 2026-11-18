@@ -8,9 +8,21 @@ import { loadConfig, UserConfig } from './config';
 import { runWizard } from './wizard';
 import { resolveTarget } from './targetResolver';
 import { runEdit, runProfiles, runRemove } from './profiles';
+import { ensureLocalCssRunning, localCssPortOf, podNameFromDisplayName } from './modules/pod/provision';
+import { runPodLink, runPodLogin } from './podCli';
 
 interface CliOptions {
-  command: 'init' | 'listen' | 'connect' | 'list' | 'profiles' | 'edit' | 'remove' | 'none';
+  command:
+    | 'init'
+    | 'listen'
+    | 'connect'
+    | 'list'
+    | 'profiles'
+    | 'edit'
+    | 'remove'
+    | 'pod-login'
+    | 'pod-link'
+    | 'none';
   connectTarget?: string;
   peerIp?: string;
   peerPort?: number;
@@ -23,9 +35,23 @@ interface CliOptions {
   displayName?: string;
   reconfigure: boolean;
   yes: boolean;
+  issuerUrl?: string;
+  email?: string;
+  password?: string;
+  useBrowser?: boolean;
 }
 
-const COMMANDS = new Set(['init', 'listen', 'connect', 'list', 'profiles', 'edit', 'remove']);
+const COMMANDS = new Set([
+  'init',
+  'listen',
+  'connect',
+  'list',
+  'profiles',
+  'edit',
+  'remove',
+  'pod-login',
+  'pod-link',
+]);
 
 function parseArgs(argv: string[]): CliOptions {
   const opts: CliOptions = {
@@ -101,6 +127,19 @@ function parseArgs(argv: string[]): CliOptions {
       case '--yes':
         opts.yes = true;
         break;
+      case '--issuer':
+      case '--css':
+        opts.issuerUrl = value();
+        break;
+      case '--email':
+        opts.email = value();
+        break;
+      case '--password':
+        opts.password = value();
+        break;
+      case '--browser':
+        opts.useBrowser = true;
+        break;
       case '--help':
         printUsage();
         process.exit(0);
@@ -109,7 +148,7 @@ function parseArgs(argv: string[]): CliOptions {
         if (!raw.startsWith('--')) {
           throw new Error(
             `Argumen tidak dikenal: ${raw}\n` +
-              'Hint: perintah tersedia → init | listen | connect <nama|PeerID> | list'
+              'Hint: perintah tersedia → init | listen | connect <nama|PeerID> | list | pod-login | pod-link'
           );
         }
         throw new Error(`Argumen tidak dikenal: ${raw} (gunakan --help untuk daftar argumen)`);
@@ -123,6 +162,8 @@ function printUsage(): void {
   console.log('Usage:');
   console.log('  Setup user     : npm run role:user [-- --name <nama> --discovery <url> [--pod <url> | --no-pod]]');
   console.log('                   (cukup isi nama + URL discovery — port & Pod lokal disiapkan otomatis)');
+  console.log('  Solid Login    : npm run pod:login [-- --issuer https://solidcommunity.net [--browser | --email <e> --password <p>]]');
+  console.log('  Solid Link     : npm run pod:link [-- --home <dir> --pod <url>]');
   console.log('  Tunggu koneksi : npm start -- --listen [--port 5000] [--pod <pod-url>] [--discovery <url>] [--home <dir>] [--name <nama>]');
   console.log('  Hubungi user   : npm run user:connect -- <nama|PeerID> [--peer-ip <ip> --peer-port <n>]');
   console.log('  User online    : npm run user:list [--discovery <url>]');
@@ -164,7 +205,8 @@ async function runList(discoveryUrl: string): Promise<void> {
   console.log(`User online di ${discoveryUrl} (${peers.length}):`);
   for (const peer of peers) {
     const name = (peer.displayName ?? '(tanpa nama)').padEnd(16);
-    console.log(`  ${name} ${fingerprintOf(peer.peerId)}  ${peer.peerId}`);
+    const webIdInfo = peer.webId ? `  [${peer.webId}]` : '';
+    console.log(`  ${name} ${fingerprintOf(peer.peerId)}  ${peer.peerId}${webIdInfo}`);
   }
   console.log('');
   console.log('Hubungi salah satu dengan: npm run user:connect -- <nama|PeerID>');
@@ -182,7 +224,16 @@ interface StartParams {
 }
 
 async function startApp(params: StartParams): Promise<void> {
+  if (params.podUrl) {
+    const cssPort = localCssPortOf(params.podUrl);
+    if (cssPort) {
+      const name = podNameFromDisplayName(params.identity.displayName);
+      await ensureLocalCssRunning({ cssPort, name }).catch(() => undefined);
+    }
+  }
+
   const localIp = await detectLocalIp(params.discoveryUrl);
+  const storedConfig = loadConfig(params.homeDir);
 
   console.log('');
   console.log(`[P2Pod] nama        : ${params.identity.displayName}`);
@@ -193,6 +244,9 @@ async function startApp(params: StartParams): Promise<void> {
   console.log(`[P2Pod] discovery   : ${params.discoveryUrl}`);
   console.log(`[P2Pod] port TCP    : ${params.listenPort}`);
   console.log(`[P2Pod] pod         : ${params.podUrl ?? '(nonaktif — history tidak disimpan)'}`);
+  if (params.podUrl && storedConfig?.pod?.webId) {
+    console.log(`[P2Pod] WebID       : ${storedConfig.pod.webId}`);
+  }
   console.log(
     `[P2Pod] mode        : ${
       params.targetPeerId
@@ -253,6 +307,28 @@ async function main(): Promise<void> {
     await runRemove({
       homeDir: opts.homeExplicit ? opts.homeDir : undefined,
       yes: opts.yes,
+    });
+    return;
+  }
+
+  if (opts.command === 'pod-login') {
+    await runPodLogin({
+      homeDir: opts.homeDir,
+      displayName: opts.displayName,
+      issuerUrl: opts.issuerUrl,
+      email: opts.email,
+      password: opts.password,
+      podUrl: opts.podUrl,
+      useBrowser: opts.useBrowser,
+    });
+    return;
+  }
+
+  if (opts.command === 'pod-link') {
+    await runPodLink({
+      homeDir: opts.homeDir,
+      podUrl: opts.podUrl,
+      displayName: opts.displayName,
     });
     return;
   }

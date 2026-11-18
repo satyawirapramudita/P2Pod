@@ -5,7 +5,14 @@
 import { createPrompter } from './prompt';
 import { Identity, ensureDir } from './identity/identity';
 import { loadConfig, saveConfig, PodSettings, UserConfig } from './config';
-import { generatePassword, localCssPortOf, podNameFromDisplayName, setupLocalPod } from './modules/pod/provision';
+import {
+  generatePassword,
+  localCssPortOf,
+  pickAvailableCssPort,
+  podNameFromDisplayName,
+  setupLocalPod,
+} from './modules/pod/provision';
+import { SolidClient } from './modules/pod/solidClient';
 
 export interface WizardOptions {
   homeDir: string;
@@ -98,7 +105,7 @@ export async function runWizard(opts: WizardOptions): Promise<WizardResult> {
     }
     console.log(`  Port TCP: ${listenPort} (otomatis — ubah dengan --port)`);
 
-    // Solid Pod — otomatis aktif (default: Pod lokal di http://localhost:3000/<nama>/)
+    // Solid Pod — otomatis aktif (default: Pod lokal di http://localhost:<port>/<nama>/)
     let pod: PodSettings;
     if (opts.podDisabled) {
       pod = { enabled: false };
@@ -111,21 +118,23 @@ export async function runWizard(opts: WizardOptions): Promise<WizardResult> {
       } else if (interactive) {
         const enablePod = await prompter.askYesNo('  Solid Pod saat ini nonaktif. Aktifkan sekarang?');
         if (enablePod) {
-          const defaultPod = `http://localhost:3000/${podNameFromDisplayName(displayName)}/`;
+          const freePort = await pickAvailableCssPort(3000);
+          const defaultPod = `http://localhost:${freePort}/${podNameFromDisplayName(displayName)}/`;
           pod = { enabled: true, podUrl: defaultPod };
           console.log(`  Solid Pod: otomatis (${defaultPod}).`);
         } else {
           pod = existing.pod;
-          console.log('  Solid Pod: tetap nonaktif — aktifkan kapan saja dengan: npm run user:edit -- --pod <url>');
+          console.log('  Solid Pod: tetap nonaktif — aktifkan kapan saja dengan: npm run pod:login');
         }
       } else {
         pod = existing.pod;
         console.log(
-          '  Solid Pod: nonaktif (dari config tersimpan) — aktifkan dengan: npm run user:edit -- --pod <url>'
+          '  Solid Pod: nonaktif (dari config tersimpan) — aktifkan dengan: npm run pod:login'
         );
       }
     } else {
-      const defaultPod = `http://localhost:3000/${podNameFromDisplayName(displayName)}/`;
+      const freePort = await pickAvailableCssPort(3000);
+      const defaultPod = `http://localhost:${freePort}/${podNameFromDisplayName(displayName)}/`;
       pod = { enabled: true, podUrl: defaultPod };
       console.log(`  Solid Pod: otomatis (${defaultPod}) — gunakan --no-pod untuk menonaktifkan.`);
     }
@@ -149,15 +158,36 @@ export async function runWizard(opts: WizardOptions): Promise<WizardResult> {
             password,
             podUrl: pod.podUrl,
           });
-          pod = { enabled: true, podUrl: result.podUrl, cssPort, email, password };
-          console.log(`  Pod siap: ${pod.podUrl}${result.provisioned ? ' (akun baru di-provision)' : ''}`);
+          let linkedAt = pod.linkedAt;
+          let webId = result.webId ?? pod.webId;
+          try {
+            const client = new SolidClient(opts.homeDir, result.podUrl);
+            const linkDoc = await client.linkIdentity(identity);
+            webId = linkDoc['@id'];
+            linkedAt = linkDoc.proof.created;
+            await client.logout().catch(() => undefined);
+          } catch {
+            // abaikan kegagalan tulis link saat init awal bila non-fatal
+          }
+          pod = {
+            enabled: true,
+            podUrl: result.podUrl,
+            webId,
+            oidcIssuer: `http://localhost:${cssPort}/`,
+            authMode: 'clientCredentials',
+            linkedAt,
+            cssPort,
+            email,
+            password,
+          };
+          console.log(`  Pod siap: ${pod.podUrl}${result.provisioned ? ' (akun baru di-provision & di-link)' : ''}`);
         } catch (err: any) {
           console.log(`  ⚠ Setup Pod otomatis gagal: ${err.message}`);
-          console.log('  Chat tetap bisa dijalankan tanpa Pod. Coba lagi dengan: npm run role:user -- --reconfigure');
+          console.log('  Chat tetap bisa dijalankan tanpa Pod. Coba lagi dengan: npm run pod:login');
           pod = { enabled: false };
         }
       } else {
-        console.log('  (Pod non-lokal — pastikan pod-config.json sudah tersedia di home ini)');
+        console.log('  (Pod non-lokal — pastikan pod-config.json sudah tersedia atau gunakan npm run pod:login)');
       }
     }
 
@@ -180,9 +210,12 @@ export async function runWizard(opts: WizardOptions): Promise<WizardResult> {
     console.log(`  Port TCP  : ${config.listenPort}`);
     console.log(
       `  Pod       : ${
-        config.pod.enabled ? config.pod.podUrl : '(nonaktif — aktifkan: npm run user:edit -- --pod <url>)'
+        config.pod.enabled ? config.pod.podUrl : '(nonaktif — aktifkan: npm run pod:login)'
       }`
     );
+    if (config.pod.enabled && config.pod.webId) {
+      console.log(`  WebID     : ${config.pod.webId}`);
+    }
     console.log('');
 
     return { identity, config };

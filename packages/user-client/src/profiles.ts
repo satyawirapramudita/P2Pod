@@ -9,9 +9,11 @@ import { loadConfig, saveConfig, UserConfig } from './config';
 import {
   generatePassword,
   localCssPortOf,
+  pickAvailableCssPort,
   podNameFromDisplayName,
   setupLocalPod,
 } from './modules/pod/provision';
+import { SolidClient } from './modules/pod/solidClient';
 import { createPrompter } from './prompt';
 import { checkDiscovery, normalizeUrl } from './wizard';
 
@@ -85,10 +87,23 @@ export function scanProfiles(extraHomes: string[] = []): LocalProfile[] {
   return profiles;
 }
 
+function readWebId(profile: LocalProfile): string | undefined {
+  if (profile.config?.pod.webId) return profile.config.pod.webId;
+  const podConfigFile = path.join(profile.homeDir, 'pod-config.json');
+  if (!fs.existsSync(podConfigFile)) return undefined;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(podConfigFile, 'utf8')) as { webId?: string };
+    return parsed.webId;
+  } catch {
+    return undefined;
+  }
+}
+
 function podLabel(profile: LocalProfile): string {
   if (!profile.config) return '-';
   if (!profile.config.pod.enabled) return '(nonaktif)';
-  return profile.config.pod.podUrl ?? '(aktif — url kosong)';
+  const mode = profile.config.pod.authMode ? ` [${profile.config.pod.authMode}]` : '';
+  return `${profile.config.pod.podUrl ?? '(aktif — url kosong)'}${mode}`;
 }
 
 export function formatProfileLines(profiles: LocalProfile[]): string[] {
@@ -96,6 +111,7 @@ export function formatProfileLines(profiles: LocalProfile[]): string[] {
   profiles.forEach((profile, index) => {
     const name = profileName(profile);
     const peerId = profile.identity?.peerId ?? '';
+    const webId = profile.config?.pod.enabled ? readWebId(profile) : undefined;
     const marker = profile.isDefault ? ' (default)' : '';
     const incomplete = profile.config ? '' : ' (belum selesai setup)';
     lines.push(`${String(index + 1).padStart(2)}. ${name}${marker}${incomplete}`);
@@ -105,6 +121,9 @@ export function formatProfileLines(profiles: LocalProfile[]): string[] {
       `    discovery  : ${profile.config?.discoveryUrl ?? '-'}   port TCP: ${profile.config?.listenPort ?? '-'}`
     );
     lines.push(`    pod        : ${podLabel(profile)}`);
+    if (webId) {
+      lines.push(`    webid      : ${webId}`);
+    }
     lines.push(`    path       : ${profile.homeDir}`);
   });
   return lines;
@@ -268,7 +287,9 @@ export async function runEdit(opts: EditOptions): Promise<void> {
       updated.pod = { enabled: false };
       changedFields.push('pod: dinonaktifkan');
     } else if (podChange === 'enable') {
-      const podUrlInput = opts.podUrl ?? `http://localhost:3000/${podNameFromDisplayName(updated.displayName)}/`;
+      const freePort = await pickAvailableCssPort(3000);
+      const podUrlInput =
+        opts.podUrl ?? `http://localhost:${freePort}/${podNameFromDisplayName(updated.displayName)}/`;
       updated.pod = { enabled: true, podUrl: podUrlInput };
       changedFields.push(`pod: diaktifkan (${podUrlInput})`);
     }
@@ -289,7 +310,29 @@ export async function runEdit(opts: EditOptions): Promise<void> {
             password,
             podUrl: updated.pod.podUrl,
           });
-          updated.pod = { enabled: true, podUrl: result.podUrl, cssPort, email, password };
+          let webId = result.webId;
+          let linkedAt: string | undefined;
+          try {
+            const identityObj = Identity.loadOrCreate(target.homeDir, updated.displayName);
+            const client = new SolidClient(target.homeDir, result.podUrl);
+            const linkDoc = await client.linkIdentity(identityObj);
+            webId = linkDoc['@id'];
+            linkedAt = linkDoc.proof.created;
+            await client.logout().catch(() => undefined);
+          } catch {
+            // abaikan bila non-fatal
+          }
+          updated.pod = {
+            enabled: true,
+            podUrl: result.podUrl,
+            webId,
+            oidcIssuer: `http://localhost:${cssPort}/`,
+            authMode: 'clientCredentials',
+            linkedAt,
+            cssPort,
+            email,
+            password,
+          };
           console.log(`  Pod siap: ${updated.pod.podUrl}${result.provisioned ? ' (akun baru di-provision)' : ''}`);
         } catch (err: any) {
           console.log(`  ⚠ Setup Pod otomatis gagal: ${err.message}`);

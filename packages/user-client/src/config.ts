@@ -7,6 +7,10 @@ import * as path from 'path';
 export interface PodSettings {
   enabled: boolean;
   podUrl?: string;
+  webId?: string;
+  oidcIssuer?: string;
+  authMode?: 'clientCredentials' | 'oidc';
+  linkedAt?: string;
   cssPort?: number;
   email?: string;
   password?: string;

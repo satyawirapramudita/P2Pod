@@ -6,6 +6,7 @@ export interface PeerEndpoint {
   ip: string;
   port: number;
   targetPeerId?: string;
+  webId?: string;
 }
 
 /** Payload POST /register. */
@@ -15,12 +16,14 @@ export interface RegisterRequest {
   displayName?: string;
   targetPeerId?: string;
   ip?: string;
+  webId?: string;
 }
 
 /** Item daftar user online (GET /peers). */
 export interface OnlinePeer {
   peerId: string;
   displayName?: string;
+  webId?: string;
   lastSeen: number;
 }
 

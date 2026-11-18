@@ -7,6 +7,7 @@ import type { OnlinePeer, PeerEndpoint } from '@p2pod/shared';
 export interface RegisterOptions {
   targetPeerId?: string;
   displayName?: string;
+  webId?: string;
 }
 
 export function isValidIpv4(ip: string): boolean {
@@ -102,6 +103,7 @@ export class DiscoveryClient {
       port,
       targetPeerId: opts.targetPeerId,
       displayName: opts.displayName,
+      webId: opts.webId,
       ip: ip || undefined,
     });
   }

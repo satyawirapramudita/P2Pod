@@ -8,6 +8,8 @@ import { Identity, fingerprintOf, verifyWithPeerId } from '../identity/identity'
 import { DiscoveryClient, isValidIpv4 } from '../discovery/discoveryClient';
 import { ChatSessionMeta, HistoryEntry, SolidClient } from '../modules/pod/solidClient';
 import { looksLikePeerId, pickPeerBySpec } from '../targetResolver';
+import { LocalStorage } from '../modules/storage/localStorage';
+import { SyncManager } from '../modules/storage/syncManager';
 
 export interface PeerAppOptions {
   identity: Identity;
@@ -38,6 +40,8 @@ export class PeerApp {
   private readonly discovery: DiscoveryClient;
   private readonly pod: SolidClient | null;
   private readonly podInitError: string | null;
+  private readonly localStorage: LocalStorage;
+  private readonly syncManager: SyncManager;
   private readonly listenPort: number;
   private readonly targetPort: number;
 
@@ -55,8 +59,11 @@ export class PeerApp {
 
   private remotePeerId: string | null = null;
   private remoteDisplayName: string | null = null;
+  private remoteWebId: string | null = null;
   private transcript: string | null = null;
   private chatId: string | null = null;
+  private currentSessionFile: string | null = null;
+  private stopPeriodicSync: (() => void) | null = null;
   private history: HistoryEntry[] = [];
   private readonly sessionStartedAt = new Date().toISOString();
 
@@ -82,6 +89,8 @@ export class PeerApp {
     }
     this.pod = pod;
     this.podInitError = podInitError;
+    this.localStorage = new LocalStorage(options.homeDir);
+    this.syncManager = new SyncManager(this.localStorage, this.pod);
   }
 
   get peerId(): string {
@@ -102,19 +111,22 @@ export class PeerApp {
     const registerOpts = {
       targetPeerId: this.targetPeerId ?? undefined,
       displayName: this.identity.displayName,
+      webId: this.pod?.webId,
     };
     await this.discovery.register(this.identity.peerId, boundPort, registerOpts);
     this.discovery.startHeartbeat(this.identity.peerId, boundPort, registerOpts);
     this.ui.printSystem('Terdaftar di Discovery Platform.');
 
+    this.ui.printSystem('Penyimpanan: Local-First aktif (pesan langsung disimpan ke disk lokal).');
     if (this.podInitError) {
-      this.ui.printSystem(`⚠ Solid Pod tidak aktif: ${this.podInitError}`);
-      this.ui.printSystem('  Chat tetap berjalan, tetapi history tidak akan dimuat/disimpan.');
+      this.ui.printSystem(`⚠ Solid Pod: ${this.podInitError} (sinkronisasi cloud dinonaktifkan).`);
     } else if (this.pod) {
       const podReachable = await this.pod.ping();
       if (!podReachable) {
-        this.ui.printSystem('⚠ Solid Pod tidak terjangkau — history tidak akan dimuat/disimpan.');
-        this.ui.printSystem('  Jalankan CSS Pod terlebih dahulu (mis. `npm run css:alice`), lalu restart aplikasi ini.');
+        this.ui.printSystem('⚠ Solid Pod offline/tidak terjangkau — sinkronisasi akan ditunda sampai Pod online.');
+      } else {
+        await this.pod.linkIdentity(this.identity).catch(() => undefined);
+        this.ui.printSystem(`Solid Pod terhubung (${this.pod.basePodUrl}) — sinkronisasi cloud siap.`);
       }
     }
 
@@ -245,6 +257,8 @@ export class PeerApp {
       peerId: this.identity.peerId,
       ephemeralKey: publicKeyBase64,
       fingerprint: this.identity.fingerprint,
+      webId: this.pod?.webId,
+      podUrl: this.pod?.basePodUrl,
     };
     conn.send(handshake);
 
@@ -287,6 +301,7 @@ export class PeerApp {
 
     this.remotePeerId = msg.peerId;
     this.remoteDisplayName = msg.displayName;
+    this.remoteWebId = msg.webId ?? null;
 
     this.crypto.deriveTempKey(msg.ephemeralKey);
     const transcript = this.crypto.buildTranscript(msg.ephemeralKey, this.identity.peerId, msg.peerId);
@@ -302,6 +317,7 @@ export class PeerApp {
     }
     this.remotePeerId = null;
     this.remoteDisplayName = null;
+    this.remoteWebId = null;
     this.transcript = null;
     this.connecting = false;
     this.crypto.reset();
@@ -332,27 +348,82 @@ export class PeerApp {
     this.connecting = false;
 
     this.ui.printSystem(`Sesi aman terbentuk dengan "${this.remoteDisplayName}".`);
-    this.ui.printSystem(`Peer terverifikasi: fingerprint ${fingerprintOf(peerId)}.`);
+    this.ui.printSystem(
+      `Peer terverifikasi: fingerprint ${fingerprintOf(peerId)}${
+        this.remoteWebId ? ` · WebID: ${this.remoteWebId}` : ''
+      }.`
+    );
     this.ui.printSystem(`chat_id: ${this.chatId}`);
 
-    await this.loadHistoryFromPod();
-    this.ui.printSystem('Ketik pesan lalu Enter. /quit untuk mengakhiri sesi.');
+    const meta: ChatSessionMeta = {
+      chatId: this.chatId,
+      localDisplayName: this.identity.displayName,
+      localPeerId: this.identity.peerId,
+      localWebId: this.pod?.webId,
+      remoteDisplayName: this.remoteDisplayName ?? 'unknown',
+      remotePeerId: this.remotePeerId ?? '',
+      remoteWebId: this.remoteWebId ?? undefined,
+      startedAt: this.sessionStartedAt,
+      endedAt: this.sessionStartedAt,
+    };
+    this.currentSessionFile = this.localStorage.initSession(this.chatId, meta);
+
+    // 1. Muat riwayat dari disk lokal secara instan (zero-delay & offline-ready)
+    this.loadHistoryFromLocal();
+
+    // 2. Jalankan sinkronisasi awal dengan Solid Pod di latar belakang
+    void this.triggerInitialSync();
+
+    // 3. Pasang auto-sync berkala ke Solid Pod setiap 25 detik
+    this.stopPeriodicSync = this.syncManager.startPeriodicSync(this.chatId, 25000, (res) => {
+      if (res.pushed > 0) {
+        this.ui.printSystem(`[Auto-Sync] ${res.pushed} sesi tersinkronisasi ke Solid Pod.`);
+      }
+      if (res.pulled > 0) {
+        this.ui.printSystem(`[Auto-Sync] ${res.pulled} sesi baru ditarik dari Solid Pod.`);
+      }
+    });
+
+    this.ui.printSystem('Ketik pesan lalu Enter. Perintah: /sync · /history · /quit');
   }
 
-  private async loadHistoryFromPod(): Promise<void> {
-    if (!this.pod || !this.chatId) return;
+  private loadHistoryFromLocal(): void {
+    if (!this.chatId) return;
 
     try {
-      const priorMessages = await this.pod.loadChatSession(this.chatId);
+      const priorMessages = this.localStorage.loadChatHistory(this.chatId);
       if (priorMessages.length === 0) return;
 
-      this.ui.printSystem(`— History sebelumnya dari Solid Pod (${priorMessages.length} pesan) —`);
+      this.ui.printSystem(`— History percakapan (${priorMessages.length} pesan) [Tersimpan Lokal] —`);
       for (const stored of priorMessages) {
         this.ui.printChat(stored.senderName, stored.timestamp, stored.text);
       }
       this.ui.printSystem('— Akhir history —');
     } catch (err: any) {
-      this.ui.printSystem(`Gagal memuat history dari Pod: ${err.message}`);
+      this.ui.printSystem(`Gagal memuat history lokal: ${err.message}`);
+    }
+  }
+
+  private async triggerInitialSync(): Promise<void> {
+    if (!this.chatId || !this.pod) return;
+
+    try {
+      const res = await this.syncManager.sync(this.chatId);
+      if (res.status === 'synced') {
+        if (res.pulled > 0) {
+          this.ui.printSystem(`[Sync] Menarik ${res.pulled} sesi riwayat baru dari Solid Pod.`);
+        }
+        if (res.pushed > 0) {
+          this.ui.printSystem(`[Sync] ${res.pushed} sesi lokal tersinkronisasi ke Solid Pod.`);
+        }
+        if (res.pushed === 0 && res.pulled === 0) {
+          this.ui.printSystem('[Sync] Riwayat lokal dan Solid Pod sudah sinkron.');
+        }
+      } else if (res.status === 'pod_unreachable') {
+        this.ui.printSystem('[Sync] Solid Pod offline — riwayat tetap aman di disk lokal.');
+      }
+    } catch (err: any) {
+      this.ui.printSystem(`[Sync] Gagal sinkronisasi Pod: ${err.message}`);
     }
   }
 
@@ -395,6 +466,14 @@ export class PeerApp {
       await this.printOnlinePeers();
       return;
     }
+    if (text === '/sync') {
+      await this.handleSyncCommand();
+      return;
+    }
+    if (text === '/history') {
+      this.handleHistoryCommand();
+      return;
+    }
     if (text === '/connect' || text.startsWith('/connect ')) {
       await this.handleConnectCommand(text);
       return;
@@ -423,8 +502,42 @@ export class PeerApp {
     console.log('  /connect <nama|PeerID>   Hubungi user (nama dari /list, atau Peer ID)');
     console.log('  /connect <IP> <PeerID>   Hubungi langsung tanpa Discovery (TCP langsung ke IP)');
     console.log('  /list                    Tampilkan user yang sedang online');
+    console.log('  /sync                    Sinkronkan riwayat chat lokal dengan Solid Pod');
+    console.log('  /history                 Tampilkan statistik riwayat percakapan lokal');
     console.log('  /help                    Tampilkan bantuan ini');
     console.log('  /quit                    Akhiri sesi & simpan history');
+  }
+
+  private async handleSyncCommand(): Promise<void> {
+    if (!this.chatId) {
+      this.ui.printSystem('Perintah /sync memerlukan sesi chat yang aktif.');
+      return;
+    }
+    this.ui.printSystem('Memulai sinkronisasi manual ke Solid Pod...');
+    const res = await this.syncManager.sync(this.chatId);
+    if (res.status === 'synced') {
+      this.ui.printSystem(
+        `Sinkronisasi sukses: ${res.pushed} sesi terkirim ke Pod, ${res.pulled} sesi baru ditarik dari Pod.`
+      );
+    } else if (res.status === 'pod_unreachable') {
+      this.ui.printSystem('Solid Pod tidak terjangkau (offline). Riwayat tetap aman di disk lokal.');
+    } else if (res.status === 'pod_disabled') {
+      this.ui.printSystem('Solid Pod dinonaktifkan (--no-pod). Mode penyimpanan adalah murni Local-First.');
+    } else {
+      this.ui.printSystem(`Sinkronisasi gagal: ${res.error}`);
+    }
+  }
+
+  private handleHistoryCommand(): void {
+    if (!this.chatId) {
+      this.ui.printSystem('Perintah /history memerlukan sesi chat yang aktif.');
+      return;
+    }
+    const msgs = this.localStorage.loadChatHistory(this.chatId);
+    const unsynced = this.localStorage.listUnsyncedSessions(this.chatId);
+    this.ui.printSystem(
+      `Riwayat Lokal: ${msgs.length} total pesan tersimpan. Sesi belum disinkronkan ke Pod: ${unsynced.length}.`
+    );
   }
 
   private async handleConnectCommand(text: string): Promise<void> {
@@ -495,7 +608,8 @@ export class PeerApp {
       this.ui.printSystem(`User online (${others.length}):`);
       for (const peer of others) {
         const name = peer.displayName ?? '(tanpa nama)';
-        console.log(`  • ${name}  [${fingerprintOf(peer.peerId)}]`);
+        const webIdSuffix = peer.webId ? `  (${peer.webId})` : '';
+        console.log(`  • ${name}  [${fingerprintOf(peer.peerId)}]${webIdSuffix}`);
       }
       this.ui.printSystem('Hubungi dengan: /connect <nama|PeerID>');
     } catch (err: any) {
@@ -510,12 +624,23 @@ export class PeerApp {
     timestamp: number,
     seq: number
   ): void {
-    this.history.push({ direction, displayName, text, timestamp, seq });
+    const entry: HistoryEntry = { direction, displayName, text, timestamp, seq };
+    this.history.push(entry);
+
+    // Tulis seketika ke penyimpanan disk lokal (crash-proof)
+    if (this.chatId && this.currentSessionFile) {
+      this.localStorage.appendMessage(this.chatId, this.currentSessionFile, entry);
+    }
   }
 
   private async shutdown(reason: string): Promise<void> {
     if (this.closing) return;
     this.closing = true;
+
+    if (this.stopPeriodicSync) {
+      this.stopPeriodicSync();
+      this.stopPeriodicSync = null;
+    }
 
     this.discovery.stopHeartbeat();
     this.tcpManager.closeServer();
@@ -529,23 +654,27 @@ export class PeerApp {
 
     await this.discovery.unregister(this.identity.peerId).catch(() => undefined);
 
-    if (this.pod) {
-      if (this.chatId && this.history.length > 0) {
-        this.ui.printSystem('Menyimpan history sesi ke Solid Pod...');
+    if (this.chatId && this.currentSessionFile) {
+      this.localStorage.finalizeSession(this.chatId, this.currentSessionFile, new Date().toISOString());
+      if (this.history.length > 0) {
+        this.ui.printSystem(`History sesi (${this.history.length} pesan) tersimpan aman di disk lokal.`);
+      }
+    }
+
+    if (this.pod && this.chatId) {
+      if (this.history.length > 0) {
+        this.ui.printSystem('Menyinkronkan sesi ke Solid Pod...');
         try {
-          const meta: ChatSessionMeta = {
-            chatId: this.chatId,
-            localDisplayName: this.identity.displayName,
-            localPeerId: this.identity.peerId,
-            remoteDisplayName: this.remoteDisplayName ?? 'unknown',
-            remotePeerId: this.remotePeerId ?? '',
-            startedAt: this.sessionStartedAt,
-            endedAt: new Date().toISOString(),
-          };
-          const savedFile = await this.pod.saveChatSession(this.chatId, meta, this.history);
-          this.ui.printSystem(`History tersimpan di Pod (${savedFile}).`);
+          const syncRes = await this.syncManager.sync(this.chatId);
+          if (syncRes.status === 'synced') {
+            this.ui.printSystem(`Sesi tersinkronisasi ke Solid Pod (${syncRes.pushed} sesi dikirim).`);
+          } else if (syncRes.status === 'pod_unreachable') {
+            this.ui.printSystem('Solid Pod offline — riwayat tetap tersimpan di lokal & akan disinkronkan nanti.');
+          } else {
+            this.ui.printSystem(`Sync ke Pod dilewati (${syncRes.status}).`);
+          }
         } catch (err: any) {
-          this.ui.printSystem(`Gagal menyimpan history ke Pod: ${err.message}`);
+          this.ui.printSystem(`Sinkronisasi Pod gagal: ${err.message} (riwayat tetap aman di lokal).`);
         }
       }
       // logout melepas handle internal session agar proses bisa keluar natural

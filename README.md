@@ -122,10 +122,21 @@ scripts/                 # setup pod, tes, utilitas
 css/                     # seed demo alice/bob
 ```
 
-## Pod (opsional)
+## Solid Pod & Linking (Lokal atau Solid Community)
 
-- Jawab **y** di wizard → Community Solid Server berjalan otomatis:
-  - data: `.css/<nama>/` · log: `.css/<nama>-css.log`
+- **Pod Lokal Otomatis**: Saat menjalankan `npm run role:user`, Community Solid Server lokal otomatis disiapkan (data: `.css/<nama>/`, log: `.css/<nama>-css.log`).
+- **Login ke Solid Community (`solidcommunity.net` / Solid-OIDC)**:
+  ```bash
+  npm run pod:login
+  ```
+  Mendukung 2 mode autentikasi:
+  1. **Browser (Solid-OIDC Redirect / PKCE)**: Membuka halaman login resmi Solid di browser dan menangkap callback secara otomatis.
+  2. **Terminal (Email & Password)**: Login langsung ke `https://solidcommunity.net` atau CSS dari terminal dan membuat OIDC Client Credentials.
+- **Linking WebID ke Identitas P2Pod**:
+  ```bash
+  npm run pod:link
+  ```
+  Menulis dan memverifikasi dokumen bukti kriptografis Ed25519 di `<podUrl>/p2pod/identity-link.json` yang mengikat `WebID` dengan `Peer ID`.
 - Hentikan Pod lokal: `npm run pod:stop` (atau `npm run pod:stop -- --name <nama>`)
 - Riwayat chat tersimpan sebagai JSON-LD di `<podUrl>/p2pod/chats/<chat_id>/...`
 
