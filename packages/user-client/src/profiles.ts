@@ -16,6 +16,7 @@ import {
 import { SolidClient } from './modules/pod/solidClient';
 import { createPrompter } from './prompt';
 import { checkDiscovery, normalizeUrl } from './wizard';
+import { setActiveProfile } from './activeProfile';
 
 export interface IdentityInfo {
   peerId: string;
@@ -143,7 +144,56 @@ export function runProfiles(homeDirArg?: string): void {
   console.log('Hapus : npm run user:remove [-- --home <path>]');
 }
 
-async function pickProfile(
+/** Cari profil berdasarkan nama (atau nomor urut dari daftar). */
+export function findProfileByName(profiles: LocalProfile[], query: string): LocalProfile | undefined {
+  const q = query.trim().toLowerCase();
+  const index = parseInt(q, 10);
+  if (Number.isInteger(index) && index >= 1 && index <= profiles.length) return profiles[index - 1];
+  return (
+    profiles.find((profile) => profileName(profile).toLowerCase() === q) ??
+    profiles.find((profile) => profileName(profile).toLowerCase().startsWith(q))
+  );
+}
+
+export interface SwitchOptions {
+  homeDir?: string;
+  target?: string;
+}
+
+/** Jadikan salah satu profil sebagai user AKTIF (dipakai `npm run user` berikutnya). */
+export async function runSwitch(opts: SwitchOptions): Promise<void> {
+  const profiles = scanProfiles(opts.homeDir ? [opts.homeDir] : []);
+  if (profiles.length === 0) {
+    throw new Error('Belum ada user di device ini. Buat dulu: npm run user:add');
+  }
+
+  let target: LocalProfile;
+  if (opts.homeDir) {
+    const resolved = path.resolve(opts.homeDir);
+    const found = profiles.find((profile) => profile.homeDir === resolved);
+    if (!found) throw new Error(`Tidak ada profil user di ${resolved}.`);
+    target = found;
+  } else if (opts.target) {
+    const found = findProfileByName(profiles, opts.target);
+    if (!found) {
+      throw new Error(`User "${opts.target}" tidak ditemukan. Lihat daftar: npm run user:profiles`);
+    }
+    target = found;
+  } else {
+    target = await pickProfile(profiles, undefined, 'dijadikan aktif');
+  }
+
+  setActiveProfile(target.homeDir, profileName(target));
+  console.log('');
+  console.log(`User aktif sekarang: ${profileName(target)} (${target.homeDir})`);
+  if (!target.config) {
+    console.log('⚠ Profil ini belum selesai setup — selesaikan: npm run role:user -- --home ' + target.homeDir);
+  } else {
+    console.log('Mulai: npm run user');
+  }
+}
+
+export async function pickProfile(
   profiles: LocalProfile[],
   homeDirArg: string | undefined,
   actionLabel: string

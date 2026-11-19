@@ -38,7 +38,7 @@ Server akan menampilkan URL LAN untuk dibagikan, mis. `http://192.168.1.10:4000/
 ## Cara 2 — Menjadi User
 
 ```bash
-npm run role:user
+npm run user:add      # buat user baru (wizard) → dijadikan AKTIF → langsung listening
 ```
 
 Wizard 2 langkah (sisanya otomatis):
@@ -46,19 +46,32 @@ Wizard 2 langkah (sisanya otomatis):
 1. **Nama** (wajib — tampil di daftar user)
 2. **URL Discovery Platform** (mis. `http://192.168.1.10:4000`) — divalidasi otomatis
 
-Otomatis: **port TCP 5000** (ubah dengan `--port`) dan **Solid Pod lokal** `http://localhost:3000/<nama>/` yang disiapkan sendiri — CSS dijalankan + akun Pod di-provision. Nonaktifkan Pod dengan `--no-pod`.
+Otomatis: profil dibuat di `.p2pod/<nama>/` (atau `--home <dir>`), **port TCP 5000** (ubah dengan `--port`) dan **Solid Pod lokal** `http://localhost:3000/<nama>/` yang disiapkan sendiri — CSS dijalankan + akun Pod di-provision. Nonaktifkan Pod dengan `--no-pod`.
 
-Setelah selesai, aplikasi langsung berjalan (listening) dan menampilkan **Peer ID**, **IP LAN**, serta daftar user online.
+Setelah selesai, user otomatis menjadi **profil aktif** dan aplikasi langsung berjalan (listening) menampilkan **Peer ID**, **IP LAN**, serta daftar user online.
+
+**Masuk lagi sebagai user aktif** (tanpa pertanyaan):
+
+```bash
+npm run user
+```
+
+**Ganti / lihat user di device ini:**
+
+```bash
+npm run user:switch              # pilih user aktif (interaktif, --home <path>, atau <nama|nomor>)
+npm run user:profiles            # daftar user di device ini
+```
 
 **Non-interaktif** (semua nilai dari flag):
 
 ```bash
-npm run role:user -- --name rani --discovery http://192.168.1.10:4000 --port 5000 --pod http://localhost:3000/rani/
+npm run user:add -- --name rani --discovery http://192.168.1.10:4000 --port 5000 --pod http://localhost:3000/rani/
 # atau tanpa Pod:
-npm run role:user -- --name rani --discovery http://192.168.1.10:4000 --port 5000 --no-pod
+npm run user:add -- --name rani --discovery http://192.168.1.10:4000 --port 5000 --no-pod
 ```
 
-Menjalankan `npm run role:user` lagi otomatis memakai config yang tersimpan (tanpa prompt). Gunakan `--reconfigure` untuk mengubah.
+`npm run role:user` tetap tersedia sebagai alias lama (wizard `init`). Menjalankannya lagi memakai config tersimpan (tanpa prompt); gunakan `--reconfigure` untuk mengubah.
 
 ### Perintah di dalam sesi
 
@@ -84,11 +97,17 @@ npm run user:connect -- MCowBQYDK2VwAyEA...  # atau berdasarkan Peer ID
 
 | Perintah | Fungsi |
 |---|---|
+| `npm run user` | Masuk sebagai **user aktif** (profil terakhir yang dipilih via `user:switch`; fallback `~/.p2pod`) |
+| `npm run user:add` | Buat user baru (wizard) → jadikan **aktif** → mulai listening |
+| `npm run user:switch` | Pilih user **aktif** (`-- <nama\|nomor>` atau `--home <path>`; interaktif bila kosong) |
 | `npm run user:profiles` | Daftar user (profil) yang ada di device ini: nama, Peer ID, discovery, status pod, path |
 | `npm run user:edit` | Ubah info user: `--name <baru>`, `--discovery <url>`, `--port <n>`, `--pod <url>` (aktifkan pod), `--no-pod` (nonaktifkan). Tanpa flag → mode terbimbing |
 | `npm run user:remove` | Hapus user dari device ini — konfirmasi dengan mengetik nama, atau `--yes` |
 
 ```bash
+npm run user
+npm run user:add -- --name rani --discovery http://localhost:4000
+npm run user:switch -- rani
 npm run user:profiles
 npm run user:edit -- --home .p2pod/alice --name alice-baru
 npm run user:edit -- --pod http://localhost:3000/alice/   # aktifkan Pod kembali
@@ -224,6 +243,8 @@ Di terminal Laptop B (atau Laptop A):
 
 ### Skema 3 — Demo dengan Solid Community Cloud Pod (`solidcommunity.net`)
 > Skenario menggunakan Solid Pod publik di internet sebagai brankas data pribadi (Personal Data Vault) dan menautkan WebID resmi.
+>
+> `pod:login`/`pod:link` menautkan kredensial ke **profil aktif** — pastikan sudah ada user (`npm run user:add`) atau pilih aktif dengan `npm run user:switch`.
 
 1. **Autentikasi Solid-OIDC:**
    ```bash
@@ -242,7 +263,7 @@ Di terminal Laptop B (atau Laptop A):
 
 3. **Mulai Chat & Sinkronkan ke Cloud:**
    ```bash
-   npm start
+   npm run user
    ```
    - Saat terhubung dengan peer, WebID Anda akan tampil saat handshake terverifikasi.
    - Ketik `/sync` di sesi chat untuk memverifikasi riwayat terunggah ke Solid Community di cloud.

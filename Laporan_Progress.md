@@ -10,7 +10,7 @@
 | Tanggal laporan | 12 November 2026 |
 | Repository | <https://github.com/satyawirapramudita/P2Pod> |
 | Branch aktif | `satya` |
-| Commit terkini (lokal) | `cbd0a80` — *feat(user): wizard init, config tersimpan, /connect by name, user:list, user:connect* |
+| Commit terkini | `d76ea11` — *docs: README quick start (2 peran) + update DEMO.md* · kode aplikasi terakhir `9cb0c6e` (setup Pod lokal otomatis) |
 | Lingkungan uji | Windows · Node.js v24.22.2 · npm 11.19.1 |
 
 ---
@@ -19,9 +19,9 @@
 
 P2Pod adalah aplikasi chat **peer-to-peer terdesentralisasi**: dua pengguna terhubung langsung lewat TCP (tanpa server pusat untuk isi percakapan), dengan enkripsi end-to-end (ECDH P-256 + AES-256-GCM), identitas permanen Ed25519, dan riwayat percakapan yang disimpan di **Solid Pod** masing-masing pengguna (Community Solid Server). Server *Discovery* hanya bertugas sebagai perantara alamat (Peer ID → IP:Port), tidak pernah melihat isi pesan.
 
-Arsitektur sudah dimigrasikan ke **monorepo 3 paket**: `packages/shared` (kontrak tipe & protokol), `packages/discovery-platform` (server discovery), dan `packages/user-client` (aplikasi peer + CLI). Fitur terbaru yang baru diselesaikan: **wizard setup interaktif (`init`)**, **konfigurasi tersimpan (`config.json`)**, **daftar user online (`user:list`)**, dan **menghubungi user lewat nama** (`/connect <nama>`).
+Arsitektur sudah dimigrasikan ke **monorepo 3 paket**: `packages/shared` (kontrak tipe & protokol), `packages/discovery-platform` (server discovery), dan `packages/user-client` (aplikasi peer + CLI). Fitur terbaru yang baru diselesaikan: **wizard setup interaktif (`init`)**, **konfigurasi tersimpan (`config.json`)**, **daftar user online (`user:list`)**, **menghubungi user lewat nama** (`/connect <nama>`), dan **setup Solid Pod lokal otomatis** — wizard langsung menyalakan Community Solid Server + provisioning akun tanpa langkah manual, ditambah **preflight warning** saat Pod tidak aktif/terjangkau dan skrip `npm run pod:stop`.
 
-Status saat ini: **inti aplikasi (MVP) selesai ≈ 90%** — seluruh modul utama berfungsi dan tervalidasi oleh smoke test (20 assertion lolos, 42,6 detik per 12 November 2026). Sisa pekerjaan adalah finalisasi: sinkronisasi repo ke GitHub, verifikasi ulang e2e, uji manual 2 mesin, pembaruan dokumentasi, dan pengambilan screenshot untuk laporan ini.
+Status saat ini: **inti aplikasi (MVP) selesai ≈ 90%** — seluruh modul utama berfungsi dan tervalidasi smoke test (20 assertion lolos, 50,9 detik; diverifikasi ulang 12 November 2026 pukul 15:04 WIB di commit `9cb0c6e`). Repo sudah dipublikasikan penuh ke GitHub (`origin/satya` sinkron dengan `d76ea11`). Sisa pekerjaan adalah finalisasi: verifikasi ulang e2e, uji manual 2 mesin, commit revisi dokumen terakhir, penyelarasan dokumentasi demo, dan pengambilan screenshot untuk laporan ini.
 
 > **Definisi lingkup MVP** = chat P2P terenkripsi di LAN/hotspot + identitas permanen + Discovery Platform + riwayat di Solid Pod + CLI yang ramah pengguna + suite tes + dokumentasi demo.
 
@@ -43,10 +43,10 @@ Status saat ini: **inti aplikasi (MVP) selesai ≈ 90%** — seluruh modul utama
 | 6 | Penyimpanan Solid Pod | 10% | 85% | 8,5 | 🟡 Inti selesai |
 | 7 | CLI & UX (wizard, listen/connect/list) | 15% | 90% | 13,5 | 🟡 Selesai, polish minor |
 | 8 | Testing (typecheck, smoke, pod, e2e) | 10% | 80% | 8,0 | 🟡 Sebagian diverifikasi ulang |
-| 9 | Dokumentasi (DEMO.md dll.) | 5% | 75% | 3,8 | 🟡 Perlu pembaruan |
+| 9 | Dokumentasi (README, DEMO.md dll.) | 5% | 80% | 4,0 | 🟡 Perlu sedikit lagi |
 | | **Total berbobot** | **100%** | | **≈ 93%** | |
 
-> **Catatan angka.** Angka tabel (≈ 93%) adalah hasil aritmetika bobot di atas. Laporan ini memakai **± 90%** sebagai angka konservatif karena tiga hal yang belum tuntas: (1) `test:e2e` dan uji manual 2 mesin belum dijalankan ulang pasca-refactor terakhir, (2) 3 commit lokal belum di-push ke GitHub, dan (3) `DEMO.md` belum mencerminkan fitur terbaru (wizard `init`, `user:list`).
+> **Catatan angka.** Angka tabel (≈ 93%) adalah hasil aritmetika bobot di atas. Laporan ini memakai **± 90%** sebagai angka konservatif karena tiga hal yang belum tuntas: (1) `test:e2e` dan uji manual 2 mesin belum dijalankan ulang pasca-refactor terakhir, (2) revisi terakhir laporan & panduan screenshot belum di-commit/push, dan (3) penyandingan akhir antar dokumen demo masih berjalan.
 
 ---
 
@@ -91,20 +91,22 @@ Status saat ini: **inti aplikasi (MVP) selesai ≈ 90%** — seluruh modul utama
 
 ### 3.6 Penyimpanan Solid Pod — 85%
 
-- `scripts/setup-pod-account.ts` — provisioning **client credentials** ke Community Solid Server (login → buat kredensial → simpan ke `.p2pod/<user>/pod-config.json`). Tersedia pintasan `npm run setup:pod:alice` / `setup:pod:bob`.
+- **Provisioning akun Pod** (`modules/pod/provision.ts`, dipakai juga oleh `scripts/setup-pod-account.ts` dan wizard): login ke CSS → buat **client credentials** → simpan ke `.p2pod/<user>/pod-config.json`. Tersedia pintasan `npm run setup:pod:alice` / `setup:pod:bob`.
 - `solidClient.ts` — login DPoP via `@inrupt/solid-client-authn-node`; menyimpan sesi dalam **format JSON-LD** (`@context: https://schema.org/`).
 - Struktur data: `p2pod/chats/{chat_id}/sessions/{timestamp}.json` (isi seluruh pesan sesi) + `metadata.json` (lawan bicara, waktu mulai/selesai).
 - **End-of-session write**: saat `/quit`, kedua peer menyimpan history ke Pod masing-masing; saat sesi baru terbentuk dengan chat_id yang sama, history lama **dimuat dan ditampilkan otomatis**.
+- **Setup Pod lokal otomatis dari wizard** (`modules/pod/provision.ts`): bila URL Pod menunjuk `localhost`, wizard membuat seed CSS, **menyalakan Community Solid Server sendiri** (proses detached; data `.css/<nama>/`, log `.css/<nama>-css.log`, PID `.css/<nama>-css.pid`), lalu **provisioning akun otomatis** (dilewati bila `pod-config.json` sudah ada). Server dapat dihentikan dengan `npm run pod:stop`. Bila gagal, wizard hanya memperingatkan dan chat tetap berjalan tanpa Pod.
+- **Preflight warning**: saat aplikasi start, Pod dicek cepat — bila tidak aktif/terjangkau, pengguna diberi peringatan bahwa history tidak akan dimuat/disimpan (chat tetap jalan).
 - Suatu quirk penamaan file CSS (`….json$.jsonld` di disk) sudah didokumentasikan di `DEMO.md` agar tidak membingungkan saat membaca data.
-- Sisa 15%: `test:e2e` perlu dijalankan ulang pasca-refactor terakhir (sebelumnya sudah pernah lulus); verifikasi manual sekali lagi bersama demo.
+- Sisa 15%: `test:e2e` perlu dijalankan ulang pasca-refactor terakhir (sebelumnya sudah pernah lulus); alur setup Pod otomatis belum tercakup tes otomatis — perlu diverifikasi manual saat demo dan diformalkan ke suite tes.
 
 ### 3.7 CLI & UX — 90%
 
-- **`init` — wizard setup interaktif 4 langkah**: (1) nama, (2) URL Discovery + validasi `/health` real-time, (3) port TCP, (4) aktivasi Solid Pod (opsional) → disimpan ke `.p2pod/<user>/config.json`. Mendukung mode non-interaktif penuh via flag dan `--reconfigure`.
+- **`init` — wizard setup interaktif 4 langkah**: (1) nama, (2) URL Discovery + validasi `/health` real-time, (3) port TCP, (4) aktivasi Solid Pod (opsional). Bila Pod diaktifkan dengan URL `localhost`, wizard sekaligus **menyiapkan Pod lokal otomatis** (lihat 3.6). Disimpan ke `.p2pod/<user>/config.json`; mendukung mode non-interaktif penuh via flag dan `--reconfigure`.
 - Perintah: `listen`, `connect <nama|PeerID>`, `list`; resolusi target via nama **harus unik** (jika duplikat, klien meminta Peer ID).
 - **Perintah dalam sesi**: `/connect <nama|PeerID>`, `/connect <IP> <PeerID>`, `/list`, `/help`, `/quit`.
-- Pintasan npm: `npm run alice`, `npm run bob`, `npm run user:list`, `npm run user:connect`.
-- Output terminal informatif: Peer ID + fingerprint + IP LAN ditampilkan saat start, status handshake, indikasi retry, dsb.
+- Pintasan npm: `npm run alice`, `npm run bob`, `npm run user:list`, `npm run user:connect`, `npm run pod:stop`.
+- Output terminal informatif: Peer ID + fingerprint + IP LAN ditampilkan saat start, status handshake, indikasi retry, peringatan preflight Pod, dsb.
 - Sisa 10%: polish kosmetik minor dan penyelarasan dokumentasi.
 
 ### 3.8 Testing — 80%
@@ -116,14 +118,16 @@ Suite tes otomatis (TypeScript, tanpa framework berat):
 | `npm run typecheck` | Verifikasi tipe seluruh kode |
 | `npm run test:smoke` | E2E tanpa Pod: Fase 0 routing IP + `/peers`; Fase 1 flow dasar; Fase 2 start terbalik; Fase 3 tie-break mutual; Fase 4 `/connect` by name + `user:list` + `init` non-interaktif |
 | `npm run test:pod` | Round-trip JSON-LD ke Solid Pod |
-| `npm run test:e2e` | E2E penuh: chat → simpan Pod → reconnect → muat history (menyiapkan CSS sendiri) |
+| `npm run test:e2e` | E2E penuh: chat → simpan Pod → reconnect → muat history (menyiapkan/memakai ulang CSS yang berjalan) |
 
-**Hasil verifikasi terbaru (12 November 2026):** `typecheck` ✅ lolos tanpa error; `test:smoke` ✅ **LULUS dalam 42,6 detik** dengan **20 assertion** semuanya OK (rincian di bagian 5). Sisa 20%: `test:pod` & `test:e2e` dijalankan ulang + uji manual skenario 2 mesin diformalkan.
+**Hasil verifikasi terbaru (12 November 2026):** `typecheck` ✅ lolos tanpa error; `test:smoke` ✅ **LULUS dalam 50,9 detik** dengan **20 assertion** semuanya OK — dijalankan ulang pukul 15:04 WIB di commit `9cb0c6e` (rincian di bagian 5). Sisa 20%: `test:pod` & `test:e2e` dijalankan ulang + uji manual skenario 2 mesin diformalkan.
 
-### 3.9 Dokumentasi — 75%
+### 3.9 Dokumentasi — 80%
 
-- `DEMO.md` — sangat lengkap: prasyarat, instalasi, Skenario A (1 mesin, 2 terminal), Skenario B (2 mesin LAN/hotspot + firewall), opsi CLI, cara membaca data Pod (3 cara), aspek keamanan, batasan, dan troubleshooting (10+ gejala umum).
-- Sisa 25%: memperbarui `DEMO.md` agar mencakup fitur terbaru (`init` wizard, `user:list`, `/connect` by name) + melampirkan screenshot (laporan ini).
+- `README.md` (baru) — quick start dua peran (host Discovery / user), wizard `init` + setup Pod otomatis, daftar perintah sesi & satu-jalan, dan ringkasan struktur repo.
+- `DEMO.md` — sangat lengkap: prasyarat, instalasi, Skenario A (1 mesin, 2 terminal), Skenario B (2 mesin LAN/hotspot + firewall), opsi CLI, cara membaca data Pod (3 cara), aspek keamanan, batasan, troubleshooting (10+ gejala, termasuk peringatan preflight Pod), plus penunjuk ke README untuk jalur cepat.
+- Tersedia juga `Guide_Screenshot.md` (panduan screenshot) dan `Laporan_Progress.md` (dokumen ini).
+- Sisa 20%: penyandingan kecil antar dokumen + melampirkan screenshot hasil demo.
 
 ---
 
@@ -131,12 +135,13 @@ Suite tes otomatis (TypeScript, tanpa framework berat):
 
 | # | Item | Detail / Aksi yang tersisa |
 |---|---|---|
-| 1 | **Sinkronisasi GitHub** | 3 commit lokal belum di-push ke `origin/satya` — repo publik masih menampilkan versi lama (struktur pra-monorepo). Aksi: `git push origin satya`. |
-| 2 | **Verifikasi ulang e2e** | `npm run test:e2e` + `npm run test:pod` perlu dijalankan ulang pasca-refactor wizard/CLI untuk mengonfirmasi tidak ada regresi pada alur Pod. |
-| 3 | **Uji manual 2 mesin** | Skenario B di `DEMO.md` (LAN/hotspot + firewall) perlu dijalankan & didokumentasikan formal (foto/log). |
-| 4 | **Pembaruan `DEMO.md`** | Tambahkan alur wizard `init`, `user:list`, dan `/connect <nama>` agar panduan sinkron dengan aplikasi. |
-| 5 | **Screenshot** | 7–8 gambar di `docs/screenshots/` (daftar & panduan lengkap ada di [Guide_Screenshot.md](Guide_Screenshot.md)). |
-| 6 | **Finalisasi laporan ini** | Perbarui status setelah item 1–5 selesai (bagian screenshot & sinkronisasi). |
+| 1 | **Commit revisi dokumen terakhir** | Revisi `Laporan_Progress.md` & `Guide_Screenshot.md` (hasil verifikasi ulang + fitur Pod otomatis) masih di working tree — perlu `git add`, `commit`, dan `push` agar GitHub memuat versi terbaru. (Seluruh commit aplikasi & dokumentasi lain sudah ter-push hingga `d76ea11`.) |
+| 2 | **Verifikasi ulang e2e** | `npm run test:e2e` + `npm run test:pod` perlu dijalankan ulang pasca-refactor wizard/CLI dan fitur Pod otomatis, untuk mengonfirmasi tidak ada regresi pada alur Pod. |
+| 3 | **Verifikasi fitur setup Pod otomatis** | Alur wizard → spawn CSS → provisioning belum tercakup tes otomatis; perlu uji manual terdokumentasi (skenario demo) dan diformalkan ke suite tes. |
+| 4 | **Uji manual 2 mesin** | Skenario B di `DEMO.md` (LAN/hotspot + firewall) perlu dijalankan & didokumentasikan formal (foto/log). |
+| 5 | **Penyelarasan `DEMO.md`** | Sebagian selesai — `DEMO.md` kini menunjuk ke `README.md` (jalur cepat 2 peran) + menambah baris troubleshooting Pod. Sisa: detail alur wizard `init`/`pod:stop` bila dirasa perlu. |
+| 6 | **Screenshot** | 7–8 gambar di `docs/screenshots/` (daftar & panduan lengkap ada di [Guide_Screenshot.md](Guide_Screenshot.md)). |
+| 7 | **Finalisasi laporan ini** | Perbarui status setelah item 1–6 selesai (bagian screenshot & sinkronisasi). |
 
 **Roadmap di luar MVP (by design, belum dikerjakan):**
 
@@ -149,7 +154,7 @@ Suite tes otomatis (TypeScript, tanpa framework berat):
 
 ## 5. Hasil Verifikasi Terbaru (12 November 2026)
 
-Dijalankan langsung di mesin pengembangan (Windows · Node.js v24.22.2):
+Dijalankan langsung di mesin pengembangan (Windows · Node.js v24.22.2 — verifikasi ulang pukul 15:04 WIB di commit `9cb0c6e`):
 
 ### 5.1 `npm run typecheck` — ✅ LULUS
 
@@ -158,7 +163,7 @@ Dijalankan langsung di mesin pengembangan (Windows · Node.js v24.22.2):
 (tanpa error)
 ```
 
-### 5.2 `npm run test:smoke` — ✅ LULUS dalam 42,6 detik (20/20 assertion)
+### 5.2 `npm run test:smoke` — ✅ LULUS dalam 50,9 detik (20/20 assertion)
 
 | Fase | Yang diverifikasi | Hasil |
 |---|---|---|
@@ -178,7 +183,7 @@ Dijalankan langsung di mesin pengembangan (Windows · Node.js v24.22.2):
 
 ### 6.1 Wizard Setup User (`init`) — ⏳ menunggu
 
-Wizard 4 langkah: nama → URL Discovery (divalidasi via `/health`) → port TCP → aktivasi Solid Pod, diakhiri ringkasan setup.
+Wizard 4 langkah: nama → URL Discovery (divalidasi via `/health`) → port TCP → aktivasi Solid Pod (termasuk baris penyiapan Pod lokal otomatis + ringkasan setup).
 
 ![Wizard setup user](docs/screenshots/01-wizard-init.png)
 
@@ -242,13 +247,16 @@ Output akhir `npm run test:e2e`: chat → simpan Pod → reconnect → muat hist
 |---|---|
 | **Repository** | <https://github.com/satyawirapramudita/P2Pod> (publik) |
 | **Branch** | `satya` |
-| **Commit terbaru (lokal)** | `cbd0a80` |
-| **Status sinkronisasi** | ⚠️ Remote tertinggal 3 commit — `57b8a02` (refactor monorepo), `ef3f829` (displayName + `GET /peers`), `cbd0a80` (wizard init, `user:list`, `/connect` by name). Jalankan `git push origin satya` agar versi di GitHub sama dengan lokal. |
+| **Commit terbaru** | `d76ea11` (README quick start + update DEMO.md) · kode aplikasi terakhir `9cb0c6e` |
+| **Status sinkronisasi** | ✅ **Sinkron** — seluruh commit hingga `d76ea11` sudah ter-push ke `origin/satya`. Catatan: revisi terakhir laporan & panduan screenshot (di working tree) belum di-commit — jalankan `git add -A && git commit && git push` untuk memutakhirkannya. |
 
 **Riwayat commit (lokal):**
 
 | Commit | Deskripsi |
 |---|---|
+| `d76ea11` | docs: README quick start (2 peran) + update DEMO.md |
+| `ef2804d` | docs: laporan progress + panduan screenshot |
+| `9cb0c6e` | feat(pod): setup Pod lokal otomatis di wizard + preflight warning + pod:stop |
 | `cbd0a80` | feat(user): wizard init, config tersimpan, /connect by name, user:list, user:connect |
 | `ef3f829` | feat(discovery): displayName + GET /peers untuk daftar user online |
 | `57b8a02` | refactor: struktur monorepo packages (shared, discovery-platform, user-client) |
@@ -265,11 +273,12 @@ P2Pod/
 │   ├── shared/               # Kontrak tipe & protokol pesan
 │   ├── discovery-platform/   # Server Discovery (Express)
 │   └── user-client/          # Aplikasi peer + CLI (wizard, net, crypto, pod)
-├── scripts/                  # setup pod, smoke/pod/e2e test, patch CSS
+├── scripts/                  # setup pod, smoke/pod/e2e test, pod-stop, patch CSS
 ├── css/                      # Seed config Community Solid Server (alice/bob)
 ├── docs/screenshots/         # Screenshot untuk laporan ini
+├── README.md                 # Quick start dua peran (host & user)
 ├── DEMO.md                   # Panduan demo lengkap (2 skenario)
-├── Guide_Screenshot.md       # Panduan screenshot (dokumen ini)
+├── Guide_Screenshot.md       # Panduan screenshot
 └── Laporan_Progress.md       # Laporan progress (dokumen ini)
 ```
 
@@ -280,18 +289,20 @@ git clone https://github.com/satyawirapramudita/P2Pod.git
 cd P2Pod
 npm install
 
-# Terminal 1–3: infrastruktur
-npm run css:alice        # Solid Pod alice  → http://localhost:3000
-npm run css:bob          # Solid Pod bob    → http://localhost:3001
-npm run discovery        # Discovery        → http://localhost:4000
+# Terminal 1: Discovery Platform
+npm run discovery        # → http://localhost:4000
 
-# (sekali saja) provisioning kredensial Pod
-npm run setup:pod:alice
-npm run setup:pod:bob
+# Terminal 2–3: dua pengguna — wizard menyiapkan Pod lokal otomatis
+npm run role:user -- --home .p2pod/alice   # nama: alice · discovery: http://localhost:4000 · port: 5000 · pod: y
+npm run role:user -- --home .p2pod/bob     # nama: bob · port: 5001 · pod: y · URL Pod: http://localhost:3001/bob/
 
-# Terminal 4–5: dua pengguna
-npm run alice            # alice menunggu koneksi (port 5000)
-npm run bob -- <PEER_ID_ALICE>   # bob menghubungi alice
+# Di jendela alice, hubungi bob:
+#   /connect bob
+
+# atau jalur pintasan klasik (CSS manual):
+npm run css:alice && npm run css:bob         # Solid Pod alice/bob
+npm run alice                                 # alice menunggu koneksi (port 5000)
+npm run bob -- <PEER_ID_ALICE>                # bob menghubungi alice
 ```
 
 ---
@@ -310,6 +321,6 @@ npm run bob -- <PEER_ID_ALICE>   # bob menghubungi alice
 
 ## 9. Penutup
 
-Secara fungsional, P2Pod telah mencapai tahap **inti aplikasi selesai (± 90%)**: chat P2P terenkripsi end-to-end dengan identitas permanen, discovery otomatis, dan persistensi riwayat di Solid Pod — semuanya berjalan dan terverifikasi lewat smoke test (20 assertion, 12 November 2026). Prioritas berikutnya: sinkronisasi ke GitHub, verifikasi ulang e2e, uji manual 2 mesin, pengambilan screenshot (lihat `Guide_Screenshot.md`), dan pembaruan dokumentasi.
+Secara fungsional, P2Pod telah mencapai tahap **inti aplikasi selesai (± 90%)**: chat P2P terenkripsi end-to-end dengan identitas permanen, discovery otomatis, setup Pod lokal otomatis dari wizard, dan persistensi riwayat di Solid Pod — semuanya berjalan, terverifikasi lewat smoke test (20 assertion, 12 November 2026 pukul 15:04 WIB di commit `9cb0c6e`), dan sudah ter-push ke GitHub. Prioritas berikutnya: verifikasi ulang e2e, uji manual 2 mesin, commit & push revisi dokumen terakhir, pengambilan screenshot (lihat `Guide_Screenshot.md`), dan penyandingan akhir dokumentasi.
 
 *Dokumen ini diperbarui terakhir: 12 November 2026.*

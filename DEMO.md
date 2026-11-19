@@ -2,7 +2,7 @@
 
 P2Pod adalah chat P2P terdesentralisasi: komunikasi real-time via TCP langsung (ECDH + AES-256-GCM), identitas permanen Ed25519, dan riwayat percakapan tersimpan di Solid Pod masing-masing pengguna (Community Solid Server lokal).
 
-> **Jalur cepat modular**: `npm run role:discovery` (jadi host Discovery Platform), `npm run role:user` (wizard init + Pod lokal otomatis + daftar user + `/connect` via nama), `npm run user:list` / `npm run user:connect -- <nama|PeerID>` (satu-jalan), `npm run pod:stop` (hentikan Pod lokal). Lihat [README.md](README.md). Dokumen ini fokus ke skenario demo detail alice/bob.
+> **Jalur cepat modular**: `npm run role:discovery` (jadi host Discovery Platform), `npm run user:add` (buat user baru + jadikan aktif + Pod lokal otomatis), `npm run user` (masuk sebagai user aktif), `npm run user:switch` (ganti user aktif), `npm run user:list` / `npm run user:connect -- <nama|PeerID>` (satu-jalan), `npm run pod:login` / `npm run pod:link` (Solid), `npm run pod:stop` (hentikan Pod lokal). Lihat [README.md](README.md). Dokumen ini fokus ke skenario demo detail alice/bob.
 
 ## Prasyarat
 
@@ -22,7 +22,7 @@ npm install
 
 ## Skenario A — Demo 1 Mesin (2 Terminal)
 
-> ⚡ Alternatif paling sederhana (tanpa setup manual, Pod otomatis): `npm run role:user` — lihat **Skenario C**.
+> ⚡ Alternatif paling sederhana (tanpa setup manual, Pod otomatis): `npm run user:add` — lihat **Skenario C**.
 
 Akun demo dari seed: `alice@example.com` / `bob@example.com`, password `p2pod-demo-123`.
 
@@ -149,18 +149,18 @@ npm run role:discovery
 
 T2 — User alice:
 ```bash
-npm run role:user
+npm run user:add
 #   Nama          : alice
 #   URL discovery : http://localhost:4000   ← boleh localhost; discovery ada di mesin ini
-#   → Pod lokal + provisioning otomatis → aplikasi listening
+#   → Pod lokal + provisioning otomatis → profil dibuat, dijadikan AKTIF, aplikasi listening
 ```
 
 **Device B (user bob):**
 ```bash
-npm run role:user
+npm run user:add
 #   Nama          : bob
 #   URL discovery : http://192.168.1.10:4000   ← IP LAN Device A (dari banner T1)
-#   → Pod lokal + provisioning otomatis → aplikasi listening
+#   → Pod lokal + provisioning otomatis → profil dibuat, dijadikan AKTIF, aplikasi listening
 ```
 
 **Mulai chat** (di prompt salah satu device):
@@ -172,7 +172,7 @@ Perintah satu-jalan juga tersedia: `npm run user:list` dan `npm run user:connect
 
 **Akhiri:** `/quit` → history tersimpan di Pod masing-masing device, dan otomatis dimuat saat sesi berikutnya.
 
-> Catatan: startup pertama tiap device lebih lama (menjalankan CSS + provisioning Pod, ± 15–60 dtk). Menjalankan `npm run role:user` lagi akan memakai config tersimpan tanpa pertanyaan.
+> Catatan: startup pertama tiap device lebih lama (menjalankan CSS + provisioning Pod, ± 15–60 dtk). Menjalankan `npm run user` berikutnya langsung masuk memakai profil AKTIF tanpa pertanyaan (ganti user dengan `npm run user:switch`). `npm run role:user` tetap tersedia sebagai alias lama.
 
 ---
 
@@ -181,7 +181,10 @@ Perintah satu-jalan juga tersedia: `npm run user:list` dan `npm run user:connect
 **Perintah positional** (argumen pertama):
 
 ```
-init                        wizard setup user (nama, discovery, port, pod) → simpan config, lalu listening
+run                         masuk sebagai user AKTIF (dipilih via user:switch; fallback ~/.p2pod) → listening
+add                         buat user baru (wizard) → jadikan aktif → listening
+switch <nama|nomor>         pilih user AKTIF (juga: --home <path>)
+init                        wizard setup user (nama, discovery, port, pod) → simpan config, lalu listening (script: role:user)
 listen                      dengarkan koneksi + daftar discovery, tunggu koneksi masuk
 connect <nama|PeerID>       daftar discovery + hubungi target (retry berkala) — urutan start bebas
 list                        tampilkan user yang sedang online (one-shot, tanpa masuk mode chat)
@@ -194,7 +197,7 @@ list                        tampilkan user yang sedang online (one-shot, tanpa m
 --pod <pod-url>             URL Pod, misal http://localhost:3000/alice/ (mengaktifkan penyimpanan history)
 --no-pod                    nonaktifkan Pod (chat tetap jalan, history tidak disimpan)
 --discovery <url>           URL Discovery Platform (default http://localhost:4000)
---home <dir>                direktori identitas & config (default ~/.p2pod, env: P2POD_HOME)
+--home <dir>                direktori identitas & config (prioritas: --home > P2POD_HOME > profil aktif > ~/.p2pod)
 --name <nama>               display name (disimpan di identity.json)
 --peer-ip <ip>              koneksi TCP langsung ke IP target tanpa lookup Discovery (dipakai bersama connect)
 --peer-port <n>             port target untuk koneksi langsung (default 5000)
@@ -214,10 +217,23 @@ list                        tampilkan user yang sedang online (one-shot, tanpa m
 **Kelola user (device ini):**
 
 ```
+user                        mulai sebagai user AKTIF (perintah utama; alias lama: role:user)
+user:add                    buat user baru + jadikan aktif + mulai (--name / --discovery / --port / --pod <url> / --no-pod)
+user:switch                 pilih user AKTIF (interaktif, --home <path>, atau <nama|nomor>)
 user:profiles               daftar user (profil) di device ini
 user:edit                   ubah info user (--name / --discovery / --port / --pod <url> / --no-pod)
 user:remove                 hapus user dari device ini (konfirmasi ketik nama, atau --yes)
 ```
+
+**Kelola Pod / Solid (profil AKTIF):**
+
+```
+pod:login                   login Solid-OIDC + tautkan WebID ke user AKTIF (--issuer / --browser / --email --password)
+pod:link                    tautkan ulang identitas Ed25519 ke Pod (memakai pod-config.json user AKTIF)
+pod:stop                    hentikan CSS lokal yang dijalankan otomatis (opsional -- --name <nama>)
+```
+
+> Perintah `pod:login`/`pod:link` menargetkan **profil aktif** (fallback `~/.p2pod`) dan butuh profil yang sudah selesai setup (`config.json`). Bila belum ada: `Belum ada profil user aktif → npm run user:add`. Kredensial disimpan per-profil di `<home>/pod-config.json` + `<home>/solid-session.json`.
 
 Semua flag juga menerima bentuk `--flag=value` (mis. `--port=5001`); `--help` menampilkan bantuan. Untuk jalur modular lengkap (host Discovery + wizard user + `user:list` + `user:connect` + `pod:stop`), lihat [README.md](README.md).
 
@@ -342,13 +358,15 @@ Halaman ini untuk mengelola akun: pod, login, dan **client credentials** (sumber
 | `Discovery Platform tidak terjangkau ... timeout` (demo 2 mesin) | Banner `npm run role:discovery` mencetak URL LAN (pakai itu — IP di dokumen hanya ilustrasi) **dan** perintah firewall Windows siap-pakai; jalankan sekali sebagai Administrator bila perlu. Uji dari device client: `ping <IP_HOST>` lalu `Test-NetConnection <IP_HOST> -Port 4000`. Ping gagal → beda jaringan/hotspot (atau AP-isolation di router); ping OK tapi port gagal → firewall host belum dibuka |
 | `Koneksi dari peer tak dikenal` berulang dengan fingerprint milik peer sendiri | Gejala versi lama: peer co-located terdaftar sebagai `127.0.0.1`. Update ke versi terbaru (IP LAN dideteksi otomatis), atau sementara jalankan Mesin A dengan `--discovery http://<IP_ALICE>:4000` |
 | `Argumen tidak dikenal: http://...` saat setup | Flag tertelan npm — pakai `npm run setup:pod:alice` / `setup:pod:bob`, atau sertakan separator `--` sebelum argumen |
+| `Belum ada profil user aktif` saat `npm run user` / `pod:login` | Belum ada user. Buat dulu: `npm run user:add` |
+| `Profil ... belum selesai setup` saat `pod:login` / `npm run user` | Profil ada tapi `config.json` belum lengkap. Selesaikan: `npm run role:user -- --home <path>` |
 | `Could not build the config files ... Invalid term IRI: file://...` (CSS crash) | Path project mengandung spasi. Jalankan `npm run patch:css` (otomatis saat `npm install`) lalu ulangi. Alternatif: pindahkan project ke path tanpa spasi, mis. `C:\P2Pod` |
 | `Menunggu peer online...` terus muncul | Normal bila target belum dibuka — connector retry tiap 3 dtk; pastikan Peer ID benar (bandingkan fingerprint) |
 | `Peer tidak ditemukan` | Hanya muncul sebagai pesan tunggu; peer dianggap lewat TTL 60 dtk bila heartbeat berhenti |
-| ⚠ `Solid Pod tidak aktif: Konfigurasi Pod tidak ditemukan` saat start | Bukan lagi crash — chat tetap jalan tanpa history. Jalankan `npm run setup:pod:alice` / `setup:pod:bob`, atau (jalur wizard) `npm run role:user -- --reconfigure` agar Pod lokal disiapkan otomatis |
+| ⚠ `Solid Pod tidak aktif: Konfigurasi Pod tidak ditemukan` saat start | Bukan lagi crash — chat tetap jalan tanpa history. Jalankan `npm run setup:pod:alice` / `setup:pod:bob`, atau (jalur wizard) `npm run role:user -- --home <path> --reconfigure` agar Pod lokal disiapkan otomatis |
 | ⚠ `Solid Pod tidak terjangkau` saat start | CSS Pod tidak jalan — jalankan `npm run css:alice`/`css:bob` (atau biarkan wizard user menyalakannya), lalu restart aplikasi. Chat tetap bisa tanpa Pod, tetapi history tidak disimpan |
-| ⚠ `Setup Pod otomatis gagal` saat `role:user` | CSS tidak bisa disiapkan otomatis (port terpakai / kredensial lama). Coba lagi: `npm run role:user -- --reconfigure`, atau jalankan tanpa Pod: tambahkan `--no-pod` |
-| Pod `(nonaktif)` setelah init dengan `--no-pod` | Aktifkan kembali: `npm run user:edit -- --pod http://localhost:3000/<nama>/` (otomatis menyiapkan CSS + provisioning). Atau jalankan `npm run role:user` lagi dan jawab **y** saat ditawari |
+| ⚠ `Setup Pod otomatis gagal` saat `role:user` / `user:add` | CSS tidak bisa disiapkan otomatis (port terpakai / kredensial lama). Coba lagi: `npm run role:user -- --home <path> --reconfigure`, atau jalankan tanpa Pod: tambahkan `--no-pod` |
+| Pod `(nonaktif)` setelah init dengan `--no-pod` | Aktifkan kembali: `npm run user:edit -- --pod http://localhost:3000/<nama>/` (otomatis menyiapkan CSS + provisioning). Atau jalankan `npm run user:add` lagi dan jawab **y** saat ditawari |
 | Pod lokal tidak bisa dihentikan | `npm run pod:stop` (semua) atau `npm run pod:stop -- --name <nama>`; data tetap tersimpan di `.css/<nama>/` |
 | `Login ke Solid Pod gagal` | CSS harus berjalan; jalankan ulang `setup:pod` |
 | Port bentrok (`EADDRINUSE`) | Di satu mesin beri `--port` berbeda tiap peer (alice 5000, bob 5001) atau hentikan proses lama (`taskkill /PID <pid> /T /F`) |
