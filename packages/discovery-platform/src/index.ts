@@ -21,6 +21,12 @@ const DEFAULT_PORT = 4000;
 const peers = new Map<string, PeerRecord>();
 
 const app = express();
+app.use((req, _res, next) => {
+  if (req.url.startsWith('//')) {
+    req.url = req.url.replace(/^\/+/, '/');
+  }
+  next();
+});
 app.use(express.json());
 
 function normalizeIp(ip: string | undefined): string {

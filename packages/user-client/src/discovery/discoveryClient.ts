@@ -91,10 +91,13 @@ export async function detectLocalIp(discoveryUrl: string): Promise<string> {
 }
 
 export class DiscoveryClient {
+  private readonly baseUrl: string;
   private heartbeat: NodeJS.Timeout | null = null;
   private localIpPromise: Promise<string> | null = null;
 
-  constructor(private readonly baseUrl: string) {}
+  constructor(baseUrl: string) {
+    this.baseUrl = baseUrl.replace(/\/+$/, '');
+  }
 
   async register(peerId: string, port: number, opts: RegisterOptions = {}): Promise<void> {
     const ip = await this.detectIp();
@@ -152,9 +155,11 @@ export class DiscoveryClient {
   }
 
   private async request(method: 'GET' | 'POST', path: string, body?: unknown): Promise<unknown> {
+    const cleanPath = path.startsWith('/') ? path : `/${path}`;
+    const url = `${this.baseUrl}${cleanPath}`;
     let response: Response;
     try {
-      response = await fetch(`${this.baseUrl}${path}`, {
+      response = await fetch(url, {
         method,
         headers: body ? { 'content-type': 'application/json' } : undefined,
         body: body ? JSON.stringify(body) : undefined,

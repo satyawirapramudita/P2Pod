@@ -30,7 +30,7 @@ export interface WizardResult {
 }
 
 export function normalizeUrl(raw: string): string {
-  const trimmed = raw.trim();
+  const trimmed = raw.trim().replace(/\/+$/, '');
   return /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
 }
 
