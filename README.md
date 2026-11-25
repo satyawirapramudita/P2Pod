@@ -7,7 +7,7 @@ Dua peran utama:
 | Peran | Deskripsi |
 |---|---|
 | **Discovery Platform** | Layanan rendezvous (Express) yang memetakan Peer ID → IP:Port. Tidak menyimpan pesan. |
-| **User** | Aplikasi chat CLI: identitas Ed25519 permanen, E2EE AES-256-GCM, riwayat di Solid Pod (opsional). |
+| **User** | Aplikasi chat P2P (CLI & Web UI Console): identitas Ed25519 permanen, E2EE AES-256-GCM, riwayat di Solid Pod (opsional). |
 
 ## Prasyarat
 
@@ -141,9 +141,11 @@ npm run user:remove -- --home .p2pod/alice
 packages/
 ├── shared/              # tipe protokol pesan & kontrak API Discovery
 ├── discovery-platform/  # peran HOST (Express)
-└── user-client/         # peran USER (CLI + modules/pod)
-scripts/                 # setup pod, tes, utilitas
+├── user-client/         # peran USER (CLI, PeerApp daemon, WebBridge, modules/pod)
+└── web-ui/              # SPA React + Vite (8-bit retro-cyber CRT Console & /styleguide)
+scripts/                 # setup pod, tes (termasuk test-web-bridge), utilitas
 css/                     # seed demo alice/bob
+DESIGN.md                # dokumentasi design system & semantic token Web UI
 ```
 
 ## Arsitektur Penyimpanan: Local-First + Solid Pod Sync
@@ -161,7 +163,50 @@ P2Pod menerapkan pola **Local-First with Cloud Vault Sync**:
 
 ## 🚀 Panduan Demo Step-by-Step
 
-Berikut adalah panduan langkah demi langkah untuk mendemonstrasikan P2Pod dalam berbagai skenario:
+Berikut adalah panduan langkah demi langkah untuk menjalankan dan mendemonstrasikan P2Pod, baik melalui **Web UI Console** maupun **CLI multi-terminal**:
+
+### Panduan Step-by-Step Web UI Console (Browser)
+> **Arsitektur:** `npm run user:web` menjalankan `WebBridge` lokal (`127.0.0.1:3333`) + daemon `PeerApp` dan menyajikan React SPA dari `packages/web-ui/dist`. Semua enkripsi, kunci Ed25519, dan penyimpanan tetap berada di mesin lokal Anda.
+
+1. **Build Frontend Web UI** *(cukup sekali di awal, atau setiap kali mengubah `packages/web-ui`)*:
+   ```bash
+   npm run build:web
+   ```
+
+2. **Terminal 1 — Jalankan Discovery Platform:**
+   ```bash
+   npm run role:discovery
+   ```
+   *Biarkan terminal ini berjalan (default port `4000`).*
+
+3. **Terminal 2 — Buat / Pilih User & Jalankan Web UI (User 1):**
+   Jika belum punya user, buat dulu via wizard:
+   ```bash
+   npm run user:add
+   ```
+   *(Atau pilih user yang sudah ada dengan `npm run user:switch`.)*
+   Lalu jalankan mode Web UI:
+   ```bash
+   npm run user:web
+   ```
+   Browser akan terbuka otomatis ke **`http://127.0.0.1:3333/`** (tambahkan `-- --no-open` jika ingin membuka manual, atau `-- --ui-port 3400` untuk mengganti port UI).
+   > *Mode development frontend (opsional):* jalankan `npm run user:web` di satu terminal dan `npm run dev:web` (`http://127.0.0.1:5173`) di terminal terpisah untuk hot-reload React.
+
+4. **Terminal 3 — Jalankan User 2 (Untuk Uji Chat 2 Peer di 1 Laptop):**
+   Jalankan user kedua dengan `--home`, `--port` TCP, dan `--ui-port` berbeda (misal profil `.p2pod/bob`):
+   ```bash
+   npm run user:web -- --home .p2pod/bob --port 5001 --ui-port 3334
+   ```
+   *(Atau gunakan CLI `npm run bob` di Terminal 3 — Web UI dan CLI 100% kompatibel saling berkomunikasi.)*
+
+5. **Uji Fitur di Web UI:**
+   - **Connect & Chat E2EE:** Di panel `01 // PEERS` tab `ONLINE PEERS`, klik **`CONNECT`** ke peer tujuan, lalu kirim pesan di panel `02 // E2EE CHAT`.
+   - **Disconnect & Reconnect:** Klik **`DISCONNECT`** pada header chat — daemon tetap hidup (idle) dan Anda dapat langsung connect ulang ke peer lain tanpa me-restart terminal.
+   - **Offline Chat Archive:** Buka tab **`SAVED CHATS`** di panel `01 // PEERS` untuk membaca riwayat pesan lokal meskipun peer sedang offline.
+   - **Topology & Solid Pod HUD:** Pantau graf koneksi pada panel `03 // TOPOLOGY` dan status vault di `04 // SOLID POD` (mendukung tombol **`SYNC NOW`**, login **Solid-OIDC**, serta tombol **`SWITCH`** profil dan **`DIRECT TCP`** di top bar).
+   - **Styleguide:** Buka `http://127.0.0.1:3333/styleguide` untuk melihat katalog komponen & design tokens.
+
+---
 
 ### Skema 1 — Demo di 1 Device (Multi-Terminal)
 > **Penyimpanan:** Menggunakan **Solid Pod Lokal (Community Solid Server)** port 3000 (Alice) dan port 3001 (Bob) + disk lokal (Local-First).
@@ -291,7 +336,9 @@ Di terminal Laptop B (atau Laptop A):
 ## Testing
 
 ```bash
-npm run typecheck          # Verifikasi tipe TypeScript
+npm run typecheck          # Verifikasi tipe TypeScript (root + @p2pod/web-ui)
+npm run build:web          # Build produksi frontend Web UI (Vite + React)
+npm run test:web-bridge    # Uji WebBridge (HTTP/WS, origin guard, multi-sesi, offline chats)
 npm run test:local-first   # Uji persistensi crash-safe & sync dua arah ke Solid Pod
 npm run test:pod           # Uji autentikasi Solid, WebID linking & round-trip JSON-LD
 npm run test:smoke         # 5 fase: discovery, routing IP, handshake, /connect by name
