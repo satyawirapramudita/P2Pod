@@ -53,8 +53,11 @@ Setelah selesai, user otomatis menjadi **profil aktif** dan aplikasi langsung be
 **Masuk lagi sebagai user aktif** (tanpa pertanyaan):
 
 ```bash
-npm run user
+npm run user          # mode CLI terminal
+npm run user:web      # mode Web UI di browser (http://127.0.0.1:3333)
 ```
+
+> Untuk menggunakan Web UI pertama kali (atau setelah mengubah kode `packages/web-ui`), jalankan `npm run build:web` terlebih dahulu agar aset statis disajikan otomatis oleh `npm run user:web`. Untuk mode pengembangan frontend live-reload, jalankan `npm run user:web` di satu terminal dan `npm run dev:web` (`http://127.0.0.1:5173`) di terminal lain.
 
 **Ganti / lihat user di device ini:**
 

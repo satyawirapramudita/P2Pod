@@ -1,0 +1,88 @@
+/* Semantic design tokens for P2Pod Web UI (8-Bit Retro-Cyber CRT Terminal & Pixel Network HUD).
+   Every UI component and page must consume these CSS custom properties exclusively. */
+
+:root {
+  /* Surfaces */
+  --surface-canvas: #080b16;
+  --surface-card: #0e1426;
+  --surface-elevated: #161f38;
+  --surface-muted: #11182e;
+  --surface-scrim: rgba(4, 6, 14, 0.82);
+  --surface-grid-line: rgba(82, 99, 145, 0.16);
+  --surface-scanline: rgba(255, 255, 255, 0.018);
+  --pattern-crt-grid:
+    linear-gradient(to right, var(--surface-grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--surface-grid-line) 1px, transparent 1px);
+
+  /* Ink & Typography Colors (WCAG AA/AAA verified) */
+  --ink-primary: #f2f5ff;
+  --ink-secondary: #a9b4d4;
+  --ink-muted: #7d8bb3;
+
+  /* Accents & Interactive Fills */
+  --accent-primary: #ff3d9a;
+  --accent-primary-hover: #ff6bb5;
+  --accent-on-primary: #080b16;
+  --accent-secondary: #00e5ff;
+  --accent-tertiary: #9d6bff;
+
+  /* Borders, Dividers & Focus */
+  --border-default: #526391;
+  --border-subtle: #283457;
+  --border-strong: #ff3d9a;
+  --focus-ring: #00e5ff;
+  --shadow-color: #03050b;
+  --shadow-accent-color: #36133b;
+
+  /* Semantic Status */
+  --status-success: #22e566;
+  --status-success-bg: rgba(34, 229, 102, 0.12);
+  --status-warning: #ffd12a;
+  --status-warning-bg: rgba(255, 209, 42, 0.12);
+  --status-danger: #ff4d5e;
+  --status-danger-bg: rgba(255, 77, 94, 0.14);
+  --status-info-bg: rgba(0, 229, 255, 0.12);
+
+  /* Typography Stacks */
+  --font-display: "Silkscreen", "Press Start 2P", ui-monospace, monospace;
+  --font-pixel-hero: "Press Start 2P", "Silkscreen", ui-monospace, monospace;
+  --font-body: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Geometry, Borders & Hard Offset Elevation */
+  --border-width-surface: 2px;
+  --border-width-strong: 2px;
+  --radius-surface: 4px;
+  --radius-control: 2px;
+  --radius-badge: 0px;
+  --shadow-surface: 4px 4px 0 var(--shadow-color);
+  --shadow-elevated: 6px 6px 0 var(--shadow-color);
+  --shadow-interactive: 3px 3px 0 var(--shadow-color);
+  --shadow-interactive-hover: 5px 5px 0 var(--shadow-color);
+  --shadow-pressed: 1px 1px 0 var(--shadow-color);
+
+  /* Spacing Rhythm */
+  --space-2xs: 0.25rem;
+  --space-xs: 0.5rem;
+  --space-sm: 0.75rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 2.25rem;
+  --space-2xl: 3.5rem;
+
+  /* Motion (Dial MOTION 1: crisp mechanical press & hover only) */
+  --ease-theme: cubic-bezier(0.2, 0, 0, 1);
+  --duration-fast: 120ms;
+  --duration-normal: 180ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

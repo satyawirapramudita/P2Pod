@@ -6,6 +6,10 @@
   "dependencies": {
     "@inrupt/solid-client": "^4.0.0",
     "@inrupt/solid-client-authn-node": "^5.0.3",
-    "@p2pod/shared": "*"
+    "@p2pod/shared": "*",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.0"
   }
 }

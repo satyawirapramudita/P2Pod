@@ -262,6 +262,33 @@ export class SolidClient {
     await this.putJson(`${this.chatBase(chatId)}metadata.json`, metadata);
   }
 
+  async listChatIds(): Promise<string[]> {
+    await this.login();
+    const chatsUrl = `${this.podUrl}p2pod/chats/`;
+    const probe = await this.authFetch(chatsUrl);
+    await probe.text().catch(() => undefined);
+    if (probe.status === 404) return [];
+    if (!probe.ok) {
+      throw new Error(`Gagal membaca container ${chatsUrl} (HTTP ${probe.status})`);
+    }
+
+    const dataset = await getSolidDataset(chatsUrl, { fetch: this.authFetch as any });
+    const urls = getContainedResourceUrlAll(dataset);
+    const ids: string[] = [];
+    for (const url of urls) {
+      const cleaned = url.endsWith('/') ? url.slice(0, -1) : url;
+      const seg = decodeURIComponent(cleaned.slice(cleaned.lastIndexOf('/') + 1));
+      if (seg && !seg.endsWith('.json')) {
+        ids.push(seg);
+      }
+    }
+    return ids;
+  }
+
+  async fetchChatMetadata(chatId: string): Promise<any | null> {
+    return this.fetchRawJson(`${this.chatBase(chatId)}metadata.json`);
+  }
+
   async listChatSessionFiles(chatId: string): Promise<{ url: string; fileName: string }[]> {
     await this.login();
 

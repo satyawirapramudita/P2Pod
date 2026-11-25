@@ -3,5 +3,6 @@
   "compilerOptions": {
     "noEmit": true
   },
-  "include": ["packages/*/src", "scripts"]
+  "include": ["packages/*/src", "scripts"],
+  "exclude": ["packages/web-ui"]
 }

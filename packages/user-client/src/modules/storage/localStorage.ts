@@ -48,6 +48,21 @@ export interface ChatMetadata {
   totalMessages?: number;
 }
 
+export interface ChatSummary {
+  chatId: string;
+  with: string;
+  withPeerId: string;
+  withWebId?: string;
+  lastActivityAt: string;
+  messageCount: number;
+  unsyncedSessions: number;
+  lastMessage?: {
+    senderName: string;
+    text: string;
+    timestamp: number;
+  };
+}
+
 function writeJsonAtomic(filePath: string, data: unknown): void {
   const content = JSON.stringify(data, null, 2);
   const dir = path.dirname(filePath);
@@ -373,5 +388,56 @@ export class LocalStorage {
 
   saveChatMetadata(chatId: string, metadata: ChatMetadata): void {
     writeJsonAtomic(this.metadataPath(chatId), metadata);
+  }
+
+  listChatIds(): string[] {
+    if (!fs.existsSync(this.baseDir)) return [];
+    try {
+      return fs
+        .readdirSync(this.baseDir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name);
+    } catch {
+      return [];
+    }
+  }
+
+  listAllChats(): ChatSummary[] {
+    const ids = this.listChatIds();
+    const summaries: ChatSummary[] = [];
+
+    for (const chatId of ids) {
+      const meta = this.loadChatMetadata(chatId);
+      const messages = this.loadChatHistory(chatId);
+      const unsynced = this.listUnsyncedSessions(chatId);
+
+      // Lewati chat kosong tanpa metadata maupun pesan
+      if (!meta && messages.length === 0) continue;
+
+      const lastMsg = messages.length > 0 ? messages[messages.length - 1] : undefined;
+      const lastActivityAt =
+        meta?.lastActivityAt ??
+        (lastMsg ? new Date(lastMsg.timestamp).toISOString() : new Date(0).toISOString());
+
+      summaries.push({
+        chatId,
+        with: meta?.with ?? 'unknown',
+        withPeerId: meta?.withPeerId ?? '',
+        withWebId: meta?.withWebId,
+        lastActivityAt,
+        messageCount: messages.length,
+        unsyncedSessions: unsynced.length,
+        lastMessage: lastMsg
+          ? {
+              senderName: lastMsg.senderName,
+              text: lastMsg.text,
+              timestamp: lastMsg.timestamp,
+            }
+          : undefined,
+      });
+    }
+
+    summaries.sort((a, b) => Date.parse(b.lastActivityAt) - Date.parse(a.lastActivityAt));
+    return summaries;
   }
 }

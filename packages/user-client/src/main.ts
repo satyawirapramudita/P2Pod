@@ -13,10 +13,13 @@ import { resolveProfileHome, setActiveProfile } from './activeProfile';
 import { createPrompter } from './prompt';
 import { ensureLocalCssRunning, localCssPortOf, podNameFromDisplayName } from './modules/pod/provision';
 import { runPodLink, runPodLogin } from './podCli';
+import { WebBridge } from './web/webBridge';
+import { openBrowser } from './modules/pod/solidAuth';
 
 interface CliOptions {
   command:
     | 'run'
+    | 'web'
     | 'add'
     | 'switch'
     | 'init'
@@ -34,6 +37,8 @@ interface CliOptions {
   peerIp?: string;
   peerPort?: number;
   port?: number;
+  uiPort?: number;
+  noOpen?: boolean;
   podUrl?: string;
   podDisabled: boolean;
   discoveryUrl?: string;
@@ -50,6 +55,7 @@ interface CliOptions {
 
 const COMMANDS = new Set([
   'run',
+  'web',
   'add',
   'switch',
   'init',
@@ -112,6 +118,12 @@ function parseArgs(argv: string[]): CliOptions {
         break;
       case '--port':
         opts.port = parseInt(value(), 10);
+        break;
+      case '--ui-port':
+        opts.uiPort = parseInt(value(), 10);
+        break;
+      case '--no-open':
+        opts.noOpen = true;
         break;
       case '--peer-ip':
         opts.peerIp = value();
@@ -443,6 +455,72 @@ async function main(): Promise<void> {
       discoveryUrl: config.discoveryUrl,
       listenPort: config.listenPort,
       podUrl: config.pod.enabled ? config.pod.podUrl : undefined,
+    });
+    return;
+  }
+
+  if (opts.command === 'web') {
+    const homeDir = resolvedHome(opts, true);
+    if (opts.uiPort !== undefined) {
+      validatePort(opts.uiPort, 'Port Web UI');
+    }
+    if (opts.port !== undefined) {
+      validatePort(opts.port, 'Port TCP');
+    }
+
+    const staticCandidate = path.join(process.cwd(), 'packages', 'web-ui', 'dist');
+    const hasStaticBuild = fs.existsSync(path.join(staticCandidate, 'index.html'));
+
+    const bridge = new WebBridge({
+      homeDir,
+      displayName: opts.displayName,
+      discoveryUrl: opts.discoveryUrl,
+      listenPort: opts.port,
+      podUrl: opts.podUrl,
+      podDisabled: opts.podDisabled,
+      uiPort: opts.uiPort,
+      staticDir: hasStaticBuild ? staticCandidate : undefined,
+    });
+
+    const { url, state } = await bridge.start();
+    console.log('');
+    console.log(`[P2Pod Web] User        : ${state.local.displayName} [${state.local.fingerprint}]`);
+    console.log(`[P2Pod Web] Home        : ${state.local.homeDir}`);
+    console.log(`[P2Pod Web] Discovery   : ${state.local.discoveryUrl}`);
+    console.log(`[P2Pod Web] TCP Listen  : port ${state.local.boundPort}`);
+    console.log(`[P2Pod Web] Solid Pod   : ${state.pod.enabled ? state.pod.podUrl : '(nonaktif)'}`);
+    console.log(`[P2Pod Web] Bridge URL  : ${url} (hanya localhost 127.0.0.1)`);
+    console.log(`[P2Pod Web] WebSocket   : ws://127.0.0.1:${bridge.uiPort}/ws`);
+    if (hasStaticBuild) {
+      console.log(`[P2Pod Web] Frontend    : disajikan langsung di ${url}`);
+      if (!opts.noOpen) {
+        openBrowser(url);
+      }
+    } else {
+      console.log('[P2Pod Web] Mode API    : frontend statis belum di-build; jalankan dev server Web UI.');
+    }
+    console.log('[P2Pod Web] Tekan Ctrl+C untuk menghentikan daemon.');
+    console.log('');
+
+    let stopping = false;
+    const handleExit = (reason: string): void => {
+      if (stopping) return;
+      stopping = true;
+      console.log(`[P2Pod Web] ${reason}`);
+      bridge
+        .stop(reason)
+        .catch(() => undefined)
+        .finally(() => {
+          const forceExit = setTimeout(() => process.exit(0), 1000);
+          forceExit.unref();
+        });
+    };
+
+    process.on('SIGINT', () => handleExit('Keluar (Ctrl+C)...'));
+    process.on('SIGTERM', () => handleExit('Keluar (SIGTERM)...'));
+
+    await new Promise<void>(() => {
+      // tetap hidup sampai sinyal SIGINT/SIGTERM
     });
     return;
   }
