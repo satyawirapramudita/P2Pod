@@ -839,7 +839,16 @@ export class WebBridge {
       });
       await this.app.stopNode('Menerapkan pengaturan jaringan...');
       try {
-        await this.bootPeerApp(this.currentHomeDir);
+        // Pass the just-saved settings as explicit overrides so a change made in
+        // the UI takes effect even when P2P_* env vars are set (env otherwise
+        // outranks the saved profile under Docker).
+        await this.bootPeerApp(this.currentHomeDir, {
+          discoveryUrl: updated.discoveryUrl,
+          listenPort: updated.listenPort,
+          publicHost: updated.network?.publicHost,
+          publicPort: updated.network?.publicPort,
+          discoveryToken: updated.network?.discoveryToken,
+        });
       } catch (err) {
         if (previousConfig) {
           saveConfig(this.currentHomeDir, previousConfig);
