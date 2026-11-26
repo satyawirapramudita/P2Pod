@@ -372,6 +372,12 @@ app.listen(port, '0.0.0.0', () => {
   } else {
     console.log('[discovery] Tidak ada alamat LAN terdeteksi — cek koneksi jaringan.');
   }
+  console.log(
+    '[discovery] Penting: semua peer harus memakai URL discovery yang SAMA persis (satu server) agar saling menemukan.'
+  );
+  console.log(
+    '[discovery] Jika tiap orang menjalankan discovery-nya sendiri, mereka TIDAK akan saling terlihat di daftar peer.'
+  );
   console.log('[discovery] Untuk akses internet: buka/port-forward TCP port ini di firewall/router.');
   console.log('[discovery] Opsional: set PUBLIC_URL=https://discovery.example.com agar banner menampilkan URL publik.');
 
