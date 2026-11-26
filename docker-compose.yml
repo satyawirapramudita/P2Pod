@@ -39,6 +39,8 @@ services:
     ports:
       # UI stays local to the Docker host. Use an SSH tunnel for a remote host.
       - "127.0.0.1:${UI_PORT:-3333}:3333"
+      # Solid-OIDC browser callback stays local to the Docker host.
+      - "127.0.0.1:${OIDC_CALLBACK_PORT:-3888}:${OIDC_CALLBACK_PORT:-3888}"
       # Public P2P listener. Forward this port on the router for cross-network chat.
       - "${P2P_PORT:-5000}:${P2P_LISTEN_PORT:-5000}"
     volumes:
@@ -46,6 +48,8 @@ services:
     environment:
       P2POD_UI_HOST: "0.0.0.0"
       P2POD_UI_PORT: "3333"
+      P2POD_OIDC_CALLBACK_HOST: "0.0.0.0"
+      P2POD_OIDC_CALLBACK_PORT: "${OIDC_CALLBACK_PORT:-3888}"
       P2POD_HOME: "/data/profile"
       P2POD_DATA_DIR: "/data/profiles"
       P2POD_STATE_DIR: "/data/state"

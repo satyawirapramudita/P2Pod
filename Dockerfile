@@ -33,7 +33,7 @@ COPY --from=build --chown=node:node /app/packages/web-ui/package.json ./packages
 COPY --from=build --chown=node:node /app/packages/web-ui/dist ./packages/web-ui/dist
 
 USER node
-EXPOSE 3333 5000
+EXPOSE 3333 3888 5000
 
 FROM runtime AS discovery
 ENV PORT=4000
@@ -43,6 +43,8 @@ CMD ["node", "packages/discovery-platform/dist/index.js"]
 FROM runtime AS web
 ENV P2POD_UI_HOST=0.0.0.0 \
     P2POD_UI_PORT=3333 \
+    P2POD_OIDC_CALLBACK_HOST=0.0.0.0 \
+    P2POD_OIDC_CALLBACK_PORT=3888 \
     P2POD_HOME=/data/profile \
     P2POD_DATA_DIR=/data/profiles \
     P2POD_STATE_DIR=/data/state \

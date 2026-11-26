@@ -146,11 +146,13 @@ export function openBrowser(url: string): boolean {
         stdio: 'ignore',
         windowsHide: true,
       });
+      child.on('error', () => undefined);
       child.unref();
       return true;
     }
     const cmd = process.platform === 'darwin' ? 'open' : 'xdg-open';
     const child = spawn(cmd, [url], { detached: true, stdio: 'ignore' });
+    child.on('error', () => undefined);
     child.unref();
     return true;
   } catch {
@@ -158,27 +160,52 @@ export function openBrowser(url: string): boolean {
   }
 }
 
+function resolveCallbackBindHost(): string {
+  const explicit = process.env.P2POD_OIDC_CALLBACK_HOST?.trim();
+  if (explicit) return explicit;
+  const uiHost = process.env.P2POD_UI_HOST?.trim();
+  if (uiHost) return uiHost;
+  return '127.0.0.1';
+}
+
+function resolveCallbackPreferredPort(override?: number): { port: number; allowFallback: boolean } {
+  if (override !== undefined) {
+    return { port: override, allowFallback: override !== 0 };
+  }
+  const raw = process.env.P2POD_OIDC_CALLBACK_PORT?.trim();
+  if (raw) {
+    const parsed = parseInt(raw, 10);
+    if (Number.isInteger(parsed) && parsed > 0 && parsed <= 65535) {
+      // Port eksplisit (mis. dipetakan Docker) tidak boleh fallback ke port acak yang tidak di-expose.
+      return { port: parsed, allowFallback: false };
+    }
+  }
+  return { port: 3888, allowFallback: true };
+}
+
 function listenCallbackServer(
   handler: http.RequestListener,
-  preferredPort = 3888
+  preferredPort = 3888,
+  bindHost = resolveCallbackBindHost(),
+  allowFallback = preferredPort !== 0
 ): Promise<{ server: http.Server; port: number }> {
   return new Promise((resolve, reject) => {
-    const tryListen = (port: number, allowFallback: boolean): void => {
+    const tryListen = (port: number, canFallback: boolean): void => {
       const server = http.createServer(handler);
       server.once('error', (err: NodeJS.ErrnoException) => {
-        if (allowFallback && (err.code === 'EADDRINUSE' || err.code === 'EACCES')) {
+        if (canFallback && (err.code === 'EADDRINUSE' || err.code === 'EACCES')) {
           tryListen(0, false);
         } else {
           reject(err);
         }
       });
-      server.listen(port, '127.0.0.1', () => {
+      server.listen(port, bindHost, () => {
         const addr = server.address();
         const actualPort = typeof addr === 'object' && addr ? addr.port : port;
         resolve({ server, port: actualPort });
       });
     };
-    tryListen(preferredPort, preferredPort !== 0);
+    tryListen(preferredPort, allowFallback);
   });
 }
 
@@ -224,41 +251,47 @@ export async function loginWithSolidBrowser(opts: {
     rejectRedirect = reject;
   });
 
-  const { server, port } = await listenCallbackServer((req, res) => {
-    const reqUrl = req.url ?? '/';
-    if (!reqUrl.startsWith('/callback')) {
-      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
-      res.end('Not Found');
-      return;
-    }
+  const callbackConfig = resolveCallbackPreferredPort(opts.callbackPort);
+  const { server, port } = await listenCallbackServer(
+    (req, res) => {
+      const reqUrl = req.url ?? '/';
+      if (!reqUrl.startsWith('/callback')) {
+        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+        res.end('Not Found');
+        return;
+      }
 
-    const fullUrl = `http://localhost:${port}${reqUrl}`;
-    const parsed = new URL(fullUrl);
-    const errorParam = parsed.searchParams.get('error');
-    const errorDesc = parsed.searchParams.get('error_description');
+      const fullUrl = `http://localhost:${port}${reqUrl}`;
+      const parsed = new URL(fullUrl);
+      const errorParam = parsed.searchParams.get('error');
+      const errorDesc = parsed.searchParams.get('error_description');
 
-    if (errorParam) {
-      res.writeHead(400, { 'content-type': 'text/html; charset=utf-8' });
+      if (errorParam) {
+        res.writeHead(400, { 'content-type': 'text/html; charset=utf-8' });
+        res.end(
+          `<!doctype html><html><head><meta charset="utf-8"><title>P2Pod Solid Login Gagal</title></head>` +
+            `<body style="font-family:system-ui,sans-serif;max-width:540px;margin:48px auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px;">` +
+            `<h2 style="color:#b91c1c;margin-top:0;">Autentikasi Solid Ditolak</h2>` +
+            `<p>${errorDesc ?? errorParam}</p><p>Silakan kembali ke Web UI atau terminal P2Pod.</p></body></html>`
+        );
+        rejectRedirect(new Error(`Autentikasi OIDC ditolak oleh provider: ${errorDesc ?? errorParam}`));
+        return;
+      }
+
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
       res.end(
-        `<!doctype html><html><head><meta charset="utf-8"><title>P2Pod Solid Login Gagal</title></head>` +
-          `<body style="font-family:system-ui,sans-serif;max-width:540px;margin:48px auto;padding:24px;border:1px solid #e5e7eb;border-radius:8px;">` +
-          `<h2 style="color:#b91c1c;margin-top:0;">Autentikasi Solid Ditolak</h2>` +
-          `<p>${errorDesc ?? errorParam}</p><p>Silakan kembali ke terminal P2Pod.</p></body></html>`
+        `<!doctype html><html><head><meta charset="utf-8"><title>P2Pod Solid Login Berhasil</title></head>` +
+          `<body style="font-family:system-ui,sans-serif;max-width:540px;margin:48px auto;padding:24px;border:1px solid #d1fae5;background:#f0fdf4;border-radius:8px;">` +
+          `<h2 style="color:#065f46;margin-top:0;">Login Solid Pod Berhasil</h2>` +
+          `<p>Akun Solid Anda sedang ditautkan ke identitas P2Pod.</p>` +
+          `<p>Anda dapat menutup tab browser ini dan kembali ke Web UI atau terminal P2Pod.</p></body></html>`
       );
-      rejectRedirect(new Error(`Autentikasi OIDC ditolak oleh provider: ${errorDesc ?? errorParam}`));
-      return;
-    }
-
-    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    res.end(
-      `<!doctype html><html><head><meta charset="utf-8"><title>P2Pod Solid Login Berhasil</title></head>` +
-        `<body style="font-family:system-ui,sans-serif;max-width:540px;margin:48px auto;padding:24px;border:1px solid #d1fae5;background:#f0fdf4;border-radius:8px;">` +
-        `<h2 style="color:#065f46;margin-top:0;">Login Solid Pod Berhasil</h2>` +
-        `<p>Akun Solid Anda sedang ditautkan ke identitas P2Pod.</p>` +
-        `<p>Anda dapat menutup tab browser ini dan kembali ke jendela terminal.</p></body></html>`
-    );
-    resolveRedirect(fullUrl);
-  }, opts.callbackPort ?? 3888);
+      resolveRedirect(fullUrl);
+    },
+    callbackConfig.port,
+    resolveCallbackBindHost(),
+    callbackConfig.allowFallback
+  );
 
   const callbackUrl = `http://localhost:${port}/callback`;
   const timer = setTimeout(() => {
