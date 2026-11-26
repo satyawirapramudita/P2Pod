@@ -223,7 +223,7 @@ export function StyleguidePage({ onNavigateConsole }: StyleguidePageProps): Reac
             statusBarRight="LIVE SVG TOPOLOGY"
           >
             <PeerTopologyGraph
-              localName="alice"
+              localName="local-node"
               localFingerprint="6575059b"
               discoveryOnline
               podEnabled

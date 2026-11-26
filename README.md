@@ -1,348 +1,202 @@
 # P2Pod
 
-Chat P2P terdesentralisasi dengan penyimpanan Solid Pod — **modular monorepo**.
+P2Pod is a decentralized peer-to-peer chat application. Messages travel directly between peers over encrypted TCP; a lightweight **Discovery Platform** only maps a Peer ID to a reachable host/port. Conversation history stays local and can optionally be backed up to a Solid Pod.
 
-Dua peran utama:
+The **web UI is the primary interface**. The CLI remains available for hosting the Discovery Platform and for advanced/headless operation. See [CLI.md](CLI.md) for every command.
 
-| Peran | Deskripsi |
+## Roles
+
+| Role | What it does |
 |---|---|
-| **Discovery Platform** | Layanan rendezvous (Express) yang memetakan Peer ID → IP:Port. Tidak menyimpan pesan. |
-| **User** | Aplikasi chat P2P (CLI & Web UI Console): identitas Ed25519 permanen, E2EE AES-256-GCM, riwayat di Solid Pod (opsional). |
+| **Discovery Platform** | Stateless Express service that maps `Peer ID -> host:port`. Never stores messages. |
+| **P2Pod app** | Serves the local web UI, runs the P2P node, encrypts chat with ECDH + AES-256-GCM, and stores history locally. |
+| **Solid Pod (optional)** | Solid-compatible storage for JSON-LD chat archives and WebID identity linking. |
 
-## Prasyarat
+The web UI binds to `127.0.0.1` only. Peers connect to the app's TCP port, not to the UI.
 
-- Node.js 18+ (diuji di Node 24) & npm
-- Satu jaringan LAN/hotspot agar user bisa saling terhubung
+## Quick start with Docker
 
-## Instalasi
+1. Copy the environment template:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+2. Edit `.env`:
+
+   - `PUBLIC_HOST` — the address other peers should dial: the Docker host's LAN IP for same-network chat, or a public IP/DNS name for cross-network chat.
+   - `P2P_PORT` — the TCP port exposed by your router (usually `5000`).
+   - `DISCOVERY_URL` — keep `http://discovery:4000` when using the included discovery service.
+   - `DISCOVERY_TOKEN` — optional shared secret for a public discovery server.
+
+3. Build and start:
+
+   ```bash
+   docker compose up -d --build
+   ```
+
+4. Open the UI:
+
+   ```text
+   http://127.0.0.1:3333
+   ```
+
+5. Complete the first-run wizard in the browser: name, discovery URL, TCP port, public host/port, optional Solid Pod.
+
+If ports `3333` / `4000` / `5000` are already used by a local dev process, change `UI_PORT`, `DISCOVERY_PORT`, or `P2P_PORT` in `.env` before starting, or stop the old process.
+
+Check status:
+
+```bash
+docker compose ps
+docker compose logs -f app
+docker compose logs -f discovery
+```
+
+Stop:
+
+```bash
+docker compose down
+```
+
+Chat history, profiles, and optional local Pod data live in the `p2pod-data` volume.
+
+## Quick start without Docker
+
+Requirements: Node.js 18+ and npm.
 
 ```bash
 npm install
+npm run build:web
 ```
 
-> `postinstall` mem-patch `componentsjs` (mendukung folder ber-spasi) dan membangun paket `shared`.
-
----
-
-## Cara 1 — Menjalankan Discovery Platform (Host)
+Start the Discovery Platform in one terminal:
 
 ```bash
-npm run role:discovery            # default port 4000
-npm run role:discovery -- 4100    # port lain (opsional)
+npm run discovery
 ```
 
-Server akan menampilkan URL LAN untuk dibagikan, mis. `http://192.168.1.10:4000/` — **bagikan URL ini** ke user yang mau gabung. Banner juga mencetak perintah Windows Firewall siap-pakai (jalankan sekali sebagai Administrator bila device lain tidak bisa connect).
-
----
-
-## Cara 2 — Menjadi User
+Start the app in another terminal:
 
 ```bash
-npm run user:add      # buat user baru (wizard) → dijadikan AKTIF → langsung listening
+npm run user:web
 ```
 
-Wizard 2 langkah (sisanya otomatis):
+Open `http://127.0.0.1:3333` and create your profile in the UI.
 
-1. **Nama** (wajib — tampil di daftar user)
-2. **URL Discovery Platform** (mis. `http://192.168.1.10:4000`) — divalidasi otomatis
+## Chatting across different networks
 
-Otomatis: profil dibuat di `.p2pod/<nama>/` (atau `--home <dir>`), **port TCP 5000** (ubah dengan `--port`) dan **Solid Pod lokal** `http://localhost:3000/<nama>/` yang disiapkan sendiri — CSS dijalankan + akun Pod di-provision. Nonaktifkan Pod dengan `--no-pod`.
+Direct TCP chat needs an inbound path to the peer's TCP listener. Public IP alone is not enough — the port must also be reachable.
 
-Setelah selesai, user otomatis menjadi **profil aktif** dan aplikasi langsung berjalan (listening) menampilkan **Peer ID**, **IP LAN**, serta daftar user online.
+For a typical home setup:
 
-**Masuk lagi sebagai user aktif** (tanpa pertanyaan):
+1. Host the Discovery Platform on a public VPS or forward TCP `4000` to the discovery host.
+2. Forward your app's TCP port (`5000` by default) on your router to the machine running the app.
+3. In the app's **Network** modal, set:
+   - **Public host / IP** — your public IP or DNS name.
+   - **Port publik** — the external port (use the same value as the listener unless your router maps a different port).
+4. Ask the other peer to do the same.
+5. Use **Uji Port Publik** in the Network modal to ask discovery to test inbound reachability.
+
+Firewall examples:
 
 ```bash
-npm run user          # mode CLI terminal
-npm run user:web      # mode Web UI di browser (http://127.0.0.1:3333)
+# Linux (ufw)
+sudo ufw allow 4000/tcp
+sudo ufw allow 5000/tcp
 ```
 
-> Untuk menggunakan Web UI pertama kali (atau setelah mengubah kode `packages/web-ui`), jalankan `npm run build:web` terlebih dahulu agar aset statis disajikan otomatis oleh `npm run user:web`. Untuk mode pengembangan frontend live-reload, jalankan `npm run user:web` di satu terminal dan `npm run dev:web` (`http://127.0.0.1:5173`) di terminal lain.
-
-**Ganti / lihat user di device ini:**
-
-```bash
-npm run user:switch              # pilih user aktif (interaktif, --home <path>, atau <nama|nomor>)
-npm run user:profiles            # daftar user di device ini
-```
-
-**Non-interaktif** (semua nilai dari flag):
-
-```bash
-npm run user:add -- --name rani --discovery http://192.168.1.10:4000 --port 5000 --pod http://localhost:3000/rani/
-# atau tanpa Pod:
-npm run user:add -- --name rani --discovery http://192.168.1.10:4000 --port 5000 --no-pod
-```
-
-`npm run role:user` tetap tersedia sebagai alias lama (wizard `init`). Menjalankannya lagi memakai config tersimpan (tanpa prompt); gunakan `--reconfigure` untuk mengubah.
-
-### Perintah di dalam sesi
-
-| Perintah | Fungsi |
-|---|---|
-| `/connect <nama\|PeerID>` | Hubungi user (nama dari `/list`) |
-| `/connect <IP> <PeerID>` | Hubungi langsung tanpa Discovery (TCP langsung) |
-| `/list` | Tampilkan user yang sedang online |
-| `/sync` | Sinkronkan riwayat chat lokal dengan Solid Pod seketika |
-| `/history` | Tampilkan statistik riwayat percakapan lokal & status sync |
-| `/help` | Bantuan |
-| `/quit` | Akhiri sesi & finalisasi history |
-
-### Perintah satu-jalan
-
-```bash
-npm run user:list                            # daftar user online
-npm run user:connect -- alice                # hubungi user berdasarkan nama
-npm run user:connect -- MCowBQYDK2VwAyEA...  # atau berdasarkan Peer ID
-```
-
-### Kelola user di device ini
-
-| Perintah | Fungsi |
-|---|---|
-| `npm run user` | Masuk sebagai **user aktif** (profil terakhir yang dipilih via `user:switch`; fallback `~/.p2pod`) |
-| `npm run user:add` | Buat user baru (wizard) → jadikan **aktif** → mulai listening |
-| `npm run user:switch` | Pilih user **aktif** (`-- <nama\|nomor>` atau `--home <path>`; interaktif bila kosong) |
-| `npm run user:profiles` | Daftar user (profil) yang ada di device ini: nama, Peer ID, discovery, status pod, path |
-| `npm run user:edit` | Ubah info user: `--name <baru>`, `--discovery <url>`, `--port <n>`, `--pod <url>` (aktifkan pod), `--no-pod` (nonaktifkan). Tanpa flag → mode terbimbing |
-| `npm run user:remove` | Hapus user dari device ini — konfirmasi dengan mengetik nama, atau `--yes` |
-
-```bash
-npm run user
-npm run user:add -- --name rani --discovery http://localhost:4000
-npm run user:switch -- rani
-npm run user:profiles
-npm run user:edit -- --home .p2pod/alice --name alice-baru
-npm run user:edit -- --pod http://localhost:3000/alice/   # aktifkan Pod kembali
-npm run user:remove -- --home .p2pod/alice
-```
-
-> `--home` opsional: bila tidak diisi dan ada beberapa user, muncul pilihan interaktif (non-interaktif: error yang menyebutkan path — gunakan `--home`).
-
----
-
-## Informasi yang Dibutuhkan
-
-**Untuk connect ke Discovery Platform** — satu-satunya input manual:
-
-- URL Discovery Platform (mis. `http://192.168.1.10:4000`)
-- Sisanya otomatis: Peer ID (di-generate), IP LAN (dideteksi), port TCP (default 5000)
-
-**Untuk chat dengan user lain:**
-
-- **Nama user** (lihat `/list`) atau **Peer ID** (±59 karakter, berawalan `MCowBQYDK2Vw...`)
-- Keduanya harus online dan terdaftar di Discovery Platform yang sama
-
----
-
-## Struktur Repo
-
-```
-packages/
-├── shared/              # tipe protokol pesan & kontrak API Discovery
-├── discovery-platform/  # peran HOST (Express)
-├── user-client/         # peran USER (CLI, PeerApp daemon, WebBridge, modules/pod)
-└── web-ui/              # SPA React + Vite (8-bit retro-cyber CRT Console & /styleguide)
-scripts/                 # setup pod, tes (termasuk test-web-bridge), utilitas
-css/                     # seed demo alice/bob
-DESIGN.md                # dokumentasi design system & semantic token Web UI
-```
-
-## Arsitektur Penyimpanan: Local-First + Solid Pod Sync
-
-P2Pod menerapkan pola **Local-First with Cloud Vault Sync**:
-1. **Crash-Safe Local Persistence:** Setiap pesan yang terkirim atau diterima langsung ditulis (*write-through*) ke disk lokal di folder `~/.p2pod/chats/<chatId>/sessions/<timestamp>.json` dan `metadata.json` dalam format Schema.org JSON-LD. Jika terminal di-close mendadak atau laptop mati, pesan tidak hilang.
-2. **Instant History Load:** Riwayat percakapan langsung dimuat seketika dari penyimpanan lokal saat sesi terhubung tanpa menunggu koneksi internet/Pod.
-3. **Sinkronisasi Dua Arah (Bidirectional Sync):**
-   - **Push ke Pod:** Mengunggah berkas sesi lokal yang belum tersinkronkan ke Solid Pod (baik Community Solid Server lokal maupun cloud `solidcommunity.net`).
-   - **Pull dari Pod:** Mengunduh berkas riwayat dari Pod jika ada sesi yang dibuat dari perangkat lain.
-   - **Auto-Sync:** Berjalan otomatis di latar belakang tiap 25 detik dan saat sesi berakhir (`/quit`).
-4. **Linking WebID Kriptografis:** Dokumen klaim bertanda tangan digital Ed25519 disimpan di `<podUrl>/p2pod/identity-link.json` yang mengikat identitas peer dengan WebID Solid Pod pengguna.
-
----
-
-## 🚀 Panduan Demo Step-by-Step
-
-Berikut adalah panduan langkah demi langkah untuk menjalankan dan mendemonstrasikan P2Pod, baik melalui **Web UI Console** maupun **CLI multi-terminal**:
-
-### Panduan Step-by-Step Web UI Console (Browser)
-> **Arsitektur:** `npm run user:web` menjalankan `WebBridge` lokal (`127.0.0.1:3333`) + daemon `PeerApp` dan menyajikan React SPA dari `packages/web-ui/dist`. Semua enkripsi, kunci Ed25519, dan penyimpanan tetap berada di mesin lokal Anda.
-
-1. **Build Frontend Web UI** *(cukup sekali di awal, atau setiap kali mengubah `packages/web-ui`)*:
-   ```bash
-   npm run build:web
-   ```
-
-2. **Terminal 1 — Jalankan Discovery Platform:**
-   ```bash
-   npm run role:discovery
-   ```
-   *Biarkan terminal ini berjalan (default port `4000`).*
-
-3. **Terminal 2 — Buat / Pilih User & Jalankan Web UI (User 1):**
-   Jika belum punya user, buat dulu via wizard:
-   ```bash
-   npm run user:add
-   ```
-   *(Atau pilih user yang sudah ada dengan `npm run user:switch`.)*
-   Lalu jalankan mode Web UI:
-   ```bash
-   npm run user:web
-   ```
-   Browser akan terbuka otomatis ke **`http://127.0.0.1:3333/`** (tambahkan `-- --no-open` jika ingin membuka manual, atau `-- --ui-port 3400` untuk mengganti port UI).
-   > *Mode development frontend (opsional):* jalankan `npm run user:web` di satu terminal dan `npm run dev:web` (`http://127.0.0.1:5173`) di terminal terpisah untuk hot-reload React.
-
-4. **Terminal 3 — Jalankan User 2 (Untuk Uji Chat 2 Peer di 1 Laptop):**
-   Jalankan user kedua dengan `--home`, `--port` TCP, dan `--ui-port` berbeda (misal profil `.p2pod/bob`):
-   ```bash
-   npm run user:web -- --home .p2pod/bob --port 5001 --ui-port 3334
-   ```
-   *(Atau gunakan CLI `npm run bob` di Terminal 3 — Web UI dan CLI 100% kompatibel saling berkomunikasi.)*
-
-5. **Uji Fitur di Web UI:**
-   - **Connect & Chat E2EE:** Di panel `01 // PEERS` tab `ONLINE PEERS`, klik **`CONNECT`** ke peer tujuan, lalu kirim pesan di panel `02 // E2EE CHAT`.
-   - **Disconnect & Reconnect:** Klik **`DISCONNECT`** pada header chat — daemon tetap hidup (idle) dan Anda dapat langsung connect ulang ke peer lain tanpa me-restart terminal.
-   - **Offline Chat Archive:** Buka tab **`SAVED CHATS`** di panel `01 // PEERS` untuk membaca riwayat pesan lokal meskipun peer sedang offline.
-   - **Topology & Solid Pod HUD:** Pantau graf koneksi pada panel `03 // TOPOLOGY` dan status vault di `04 // SOLID POD` (mendukung tombol **`SYNC NOW`**, login **Solid-OIDC**, serta tombol **`SWITCH`** profil dan **`DIRECT TCP`** di top bar).
-   - **Styleguide:** Buka `http://127.0.0.1:3333/styleguide` untuk melihat katalog komponen & design tokens.
-
----
-
-### Skema 1 — Demo di 1 Device (Multi-Terminal)
-> **Penyimpanan:** Menggunakan **Solid Pod Lokal (Community Solid Server)** port 3000 (Alice) dan port 3001 (Bob) + disk lokal (Local-First).
-
-Buka **3 jendela terminal** (PowerShell / Command Prompt) di folder proyek:
-
-1. **Terminal 1 (Host Discovery Platform):**
-   ```bash
-   npm run role:discovery
-   ```
-   *Biarkan terminal ini tetap berjalan (listening di port 4000).*
-
-2. **Terminal 2 (User 1 — Alice):**
-   ```bash
-   npm run alice
-   ```
-   *Alice otomatis mendengarkan di port TCP 5000, menjalankan Solid Pod lokal (CSS port 3000 di `http://localhost:3000/alice/`), dan mendaftar ke Discovery.*
-
-3. **Terminal 3 (User 2 — Bob):**
-   ```bash
-   npm run bob -- alice
-   ```
-   *Bob otomatis mendengarkan di port TCP 5001, menjalankan Solid Pod lokal (CSS port 3001 di `http://localhost:3001/bob/`), mencari Alice via Discovery, dan membentuk sesi aman E2EE.*
-
-4. **Uji Coba Sesi Chat & Fitur:**
-   - Ketik pesan bolak-balik antara Terminal 2 dan Terminal 3.
-   - Ketik `/history` untuk melihat pesan yang tersimpan di disk lokal.
-   - Ketik `/sync` untuk memicu sinkronisasi ke Solid Pod lokal masing-masing.
-   - Ketik `/quit` di salah satu terminal.
-   - Jalankan ulang Terminal 2 dan 3: riwayat percakapan sebelumnya langsung termuat (*instant local history* dan sinkron dengan Pod).
-
----
-
-### Skema 2 — Demo 2 Device Berbeda (Satu Jaringan LAN / Wi-Fi / Hotspot)
-> **Penyimpanan:** Masing-masing laptop **otomatis disiapkan Solid Pod Lokal (CSS bawaan)** di localhost laptop masing-masing (tanpa perlu setup manual), ATAU otomatis memakai Solid Community Cloud Pod jika laptop tersebut sebelumnya sudah login via `npm run pod:login`.
-
-#### Langkah 1: Hubungkan ke Jaringan yang Sama
-Pastikan Laptop A dan Laptop B terhubung ke SSID Wi-Fi atau hotspot ponsel yang sama.
-
-#### Langkah 2: Konfigurasi Firewall di Laptop A (Host)
-Buka PowerShell **sebagai Administrator** di Laptop A, jalankan perintah berikut sekali saja untuk membuka port Discovery (4000) dan P2P (5000):
 ```powershell
+# Windows (run as Administrator)
 New-NetFirewallRule -DisplayName "P2Pod Discovery 4000" -Direction Inbound -Protocol TCP -LocalPort 4000 -Action Allow
 New-NetFirewallRule -DisplayName "P2Pod P2P 5000" -Direction Inbound -Protocol TCP -LocalPort 5000 -Action Allow
 ```
 
-#### Langkah 3: Jalankan Discovery Platform di Laptop A
-Di Laptop A (Terminal 1):
-```bash
-npm run role:discovery
-```
-*Catat alamat LAN yang tampil pada banner terminal, misalnya `http://192.168.1.15:4000/`.*
+Notes:
 
-#### Langkah 4: Jalankan User di Laptop A (Alice)
-Di Laptop A (Terminal 2):
-```bash
-npm run role:user
-```
-* Masukkan Nama: `alice`
-* Masukkan URL Discovery: `http://localhost:4000` (atau tekan Enter jika default sesuai).
-* *Wizard otomatis menyiapkan Solid Pod lokal Alice di Laptop A (di `http://localhost:3000/alice/` atau port 3005) dan menyimpannya di `.css/alice`.*
+- Both peers should forward the port for reliable two-way connections.
+- If only one side is reachable, the unreachable side must initiate the connection.
+- **CGNAT** users cannot receive inbound connections without a relay. This version does not include a relay.
+- The web UI is intentionally local-only. On a remote Docker host, use an SSH tunnel:
 
-#### Langkah 5: Jalankan User di Laptop B (Bob)
-Di Laptop B (Terminal Laptop Teman):
-```bash
-npm run role:user
-```
-* Masukkan Nama: `bob`
-* Masukkan URL Discovery: Masukkan URL LAN Laptop A yang tadi dicatat (misal: `http://192.168.1.15:4000`).
-* *Wizard di Laptop B juga otomatis menyiapkan Solid Pod lokal Bob di Laptop B (di `http://localhost:3000/bob/`) dan menyimpannya di `.css/bob` laptop teman.*
+  ```bash
+  ssh -L 3333:127.0.0.1:3333 user@your-server
+  ```
 
-#### Langkah 6: Hubungkan & Mulai Percakapan
-Di terminal Laptop B (atau Laptop A):
+  Then open `http://127.0.0.1:3333` on your machine.
+
+### Using a separate public discovery server
+
+Run only the discovery service on a public host:
+
+```bash
+docker compose up -d discovery
+```
+
+On each user's machine, run the app with the public discovery URL:
+
+```bash
+P2P_DISCOVERY_URL=https://discovery.example.com npm run user:web
+```
+
+If the discovery server is behind a reverse proxy, set `TRUST_PROXY=1` and use HTTPS in `P2P_DISCOVERY_URL`.
+
+## What you can do in the UI
+
+- **First run** — create an Ed25519 identity and profile.
+- **Online peers** — see peers registered on the same discovery server.
+- **Chat** — connect, send E2EE messages, disconnect, reconnect.
+- **Direct connect** — connect by hostname/IP + TCP port + Peer ID without discovery.
+- **Offline archive** — read locally stored conversation history while peers are offline.
+- **Network settings** — change discovery URL, listener port, public endpoint, and discovery token.
+- **Profiles** — create, switch, and delete local identities.
+- **Solid Pod** — log in, link the Ed25519 identity to a WebID, and sync archives.
+- **Topology/logs** — inspect the local peer graph and system log.
+
+## Storage and security
+
+- Identity keys are generated and stored locally; Peer ID is the Ed25519 public key.
+- Session keys use ephemeral ECDH P-256; every chat message uses AES-256-GCM.
+- Both peers sign the session transcript, so a man-in-the-middle is detected.
+- The Discovery Platform only sees Peer ID, display name, WebID (optional), and endpoint metadata.
+- Local chat history is written to disk immediately (local-first, crash-safe).
+- Solid Pod sync is optional and disabled if no Pod is configured.
+- The UI is served only on loopback. The P2P listener is the only port that needs public exposure.
+
+## CLI
+
+The complete, action-oriented CLI reference is in [CLI.md](CLI.md). This includes:
+
+- discovery setup and options
+- app/UI startup
+- profile creation and management
+- chat and direct-connect fallback commands
+- Solid Pod commands
+- Docker commands
+- all flags and troubleshooting commands
+
+## Project structure
+
 ```text
-/list
-/connect alice
+packages/
+├── shared/              # protocol + discovery API types
+├── discovery-platform/  # discovery server
+├── user-client/         # peer daemon, WebBridge, local storage, Solid modules
+└── web-ui/              # React + Vite web console
+scripts/                 # generic Pod setup/stop and CSS patch
+Dockerfile               # multi-target discovery/web images
+docker-compose.yml       # public discovery + local UI app
 ```
-* Sesi P2P terenkripsi (ECDH + AES-256-GCM) terbentuk langsung antar kedua laptop.
-* Kirim pesan obrolan. Setiap pesan tersimpan aman di disk lokal masing-masing laptop dan disinkronkan ke Solid Pod masing-masing!
 
----
-
-### Skema 3 — Demo dengan Solid Community Cloud Pod (`solidcommunity.net`)
-> Skenario menggunakan Solid Pod publik di internet sebagai brankas data pribadi (Personal Data Vault) dan menautkan WebID resmi.
->
-> `pod:login`/`pod:link` menautkan kredensial ke **profil aktif** — pastikan sudah ada user (`npm run user:add`) atau pilih aktif dengan `npm run user:switch`.
-
-1. **Autentikasi Solid-OIDC:**
-   ```bash
-   npm run pod:login
-   ```
-   Pilih opsi **Browser**:
-   - Browser akan otomatis terbuka ke `https://solidcommunity.net`.
-   - Login dengan akun Anda dan klik **Authorize**.
-   - Terminal akan menangkap token dan menampilkan WebID Anda (misal `https://crispyrinux.solidcommunity.net/profile/card#me`).
-
-2. **Tautkan Identitas Ed25519 ke WebID (Cryptographic Link):**
-   ```bash
-   npm run pod:link
-   ```
-   *Aplikasi membuat klaim kriptografis bertanda tangan Ed25519 dan mengunggahnya ke `<podUrl>/p2pod/identity-link.json`.*
-
-3. **Mulai Chat & Sinkronkan ke Cloud:**
-   ```bash
-   npm run user
-   ```
-   - Saat terhubung dengan peer, WebID Anda akan tampil saat handshake terverifikasi.
-   - Ketik `/sync` di sesi chat untuk memverifikasi riwayat terunggah ke Solid Community di cloud.
-
----
-
-### Skema 4 — Demo Direct TCP & Pengujian Offline / Crash-Safety
-> Skenario membuktikan ketahanan offline dan keamanan data jika proses dihentikan secara paksa.
-
-1. **Koneksi Direct TCP (Tanpa Discovery Platform):**
-   - Laptop A: Jalankan `npm start -- --listen --port 5000` (catat IP dan Peer ID Alice).
-   - Laptop B: Ketik `/connect <IP_Laptop_A> <PeerID_Alice>` (koneksi TCP langsung tanpa memerlukan server discovery).
-
-2. **Pengujian Crash-Safety (Local-First):**
-   - Saat sesi chat aktif, kirim beberapa pesan penting.
-   - **Tutup paksa terminal** (klik tombol [X] jendela terminal atau tekan `Ctrl+C` tanpa mengetik `/quit`).
-   - Buka kembali aplikasi chat: seluruh pesan yang baru dikirim **tetap tersimpan utuh** di disk lokal dan tidak hilang!
-   - Saat Solid Pod kembali aktif, ketik `/sync` untuk menyinkronkan sesi yang tertinggal ke Pod.
-
----
-
-## Testing
+## Development checks
 
 ```bash
-npm run typecheck          # Verifikasi tipe TypeScript (root + @p2pod/web-ui)
-npm run build:web          # Build produksi frontend Web UI (Vite + React)
-npm run test:web-bridge    # Uji WebBridge (HTTP/WS, origin guard, multi-sesi, offline chats)
-npm run test:local-first   # Uji persistensi crash-safe & sync dua arah ke Solid Pod
-npm run test:pod           # Uji autentikasi Solid, WebID linking & round-trip JSON-LD
-npm run test:smoke         # 5 fase: discovery, routing IP, handshake, /connect by name
-npm run test:e2e           # End-to-end lengkap dengan CSS
+npm run typecheck
+npm run build
 ```
 
-> Untuk panduan detail dan troubleshooting tambahan, lihat [DEMO.md](DEMO.md).
+Docker health checks are defined in `docker-compose.yml`.
+
+## License
+
+MIT

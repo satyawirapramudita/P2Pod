@@ -114,9 +114,15 @@ export function localCssPortOf(podUrl: string): number | null {
   }
 }
 
+export function cssRootDir(): string {
+  return process.env.P2POD_CSS_DIR
+    ? path.resolve(process.env.P2POD_CSS_DIR)
+    : path.join(process.cwd(), '.css');
+}
+
 function cssSeedPath(name: string): string {
-  // Disimpan di .css/seeds/ (gitignored) — seed alice/bob demo tetap di css/.
-  return path.join(process.cwd(), '.css', 'seeds', `seed-${name}.json`);
+  // Disimpan di .css/seeds/ (gitignored) — file seed bersifat per-profil.
+  return path.join(cssRootDir(), 'seeds', `seed-${name}.json`);
 }
 
 /** Pastikan file seed CSS ada. Bila sudah ada, kembalikan password yang tersimpan di file itu. */
@@ -162,7 +168,7 @@ export async function ensureLocalCssRunning(opts: { cssPort: number; name: strin
     );
   }
 
-  const cssRoot = path.join(process.cwd(), '.css');
+  const cssRoot = cssRootDir();
   const dataDir = path.join(cssRoot, opts.name);
   ensureDir(dataDir);
 

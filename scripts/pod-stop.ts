@@ -5,7 +5,9 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 
-const cssRoot = path.join(process.cwd(), '.css');
+const cssRoot = process.env.P2POD_CSS_DIR
+  ? path.resolve(process.env.P2POD_CSS_DIR)
+  : path.join(process.cwd(), '.css');
 
 function parseName(argv: string[]): string | undefined {
   const idx = argv.indexOf('--name');

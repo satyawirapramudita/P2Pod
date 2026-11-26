@@ -16,13 +16,27 @@ export interface PodSettings {
   password?: string;
 }
 
+export interface NetworkSettings {
+  /** Public IPv4/IPv6/hostname other peers should dial. Empty = use discovery-observed IP. */
+  publicHost?: string;
+  /** Public TCP port when the router/Docker maps a different external port. */
+  publicPort?: number;
+  /** Optional shared secret required by a public discovery server. */
+  discoveryToken?: string;
+}
+
 export interface UserConfig {
   displayName: string;
   discoveryUrl: string;
   listenPort: number;
   pod: PodSettings;
+  network?: NetworkSettings;
   createdAt: string;
   updatedAt: string;
+}
+
+export function networkOf(config: UserConfig | null | undefined): NetworkSettings {
+  return config?.network ?? {};
 }
 
 export function configPath(homeDir: string): string {

@@ -13,7 +13,10 @@ export interface ActiveProfileState {
 }
 
 export function activeStatePath(): string {
-  return path.join(process.cwd(), '.p2pod', 'active.json');
+  const stateDir = process.env.P2POD_STATE_DIR
+    ? path.resolve(process.env.P2POD_STATE_DIR)
+    : path.join(process.cwd(), '.p2pod');
+  return path.join(stateDir, 'active.json');
 }
 
 function hasProfileFiles(homeDir: string): boolean {
@@ -77,7 +80,7 @@ export function resolveProfileHome(opts: ResolveHomeOptions = {}): string {
       throw new Error('Belum ada profil user aktif. Buat dulu: npm run user:add');
     }
     throw new Error(
-      `Profil di ${home} belum selesai setup. Selesaikan: npm run role:user -- --home ${home}`
+      `Profil di ${home} belum selesai setup. Selesaikan: npm run user:add -- --home ${home}`
     );
   }
   return home;

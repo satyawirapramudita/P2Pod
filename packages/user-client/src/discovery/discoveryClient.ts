@@ -1,19 +1,62 @@
 // packages/user-client/src/discovery/discoveryClient.ts
 
 import * as dgram from 'dgram';
+import * as net from 'net';
 import * as os from 'os';
-import type { OnlinePeer, PeerEndpoint } from '@p2pod/shared';
+import type { OnlinePeer, PeerEndpoint, ProbeResponse, RegisterResponse } from '@p2pod/shared';
 
 export interface RegisterOptions {
   targetPeerId?: string;
   displayName?: string;
   webId?: string;
+  publicHost?: string;
+  publicPort?: number;
 }
 
 export function isValidIpv4(ip: string): boolean {
   const parts = ip.split('.');
   if (parts.length !== 4) return false;
   return parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255);
+}
+
+/** Accept IPv4, IPv6, and DNS hostnames (needed for public/Docker deployments). */
+export function isValidHost(host: string): boolean {
+  const value = host.trim().replace(/^\[|\]$/g, '');
+  if (!value || value.length > 253) return false;
+  if (net.isIP(value)) return true;
+  if (value === 'localhost') return true;
+  return /^(?=.{1,253}$)([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$/.test(
+    value
+  );
+}
+
+export function isPrivateIp(ip: string): boolean {
+  if (!ip) return true;
+  if (ip === 'localhost' || ip === '::1' || ip === '[::1]') return true;
+  const family = net.isIP(ip);
+  if (family === 4) {
+    const parts = ip.split('.').map((part) => Number(part));
+    const [a, b] = parts;
+    return (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168)
+    );
+  }
+  if (family === 6) {
+    const normalized = ip.toLowerCase();
+    return (
+      normalized === '::1' ||
+      normalized === '::' ||
+      normalized.startsWith('fc') ||
+      normalized.startsWith('fd') ||
+      normalized.startsWith('fe80:')
+    );
+  }
+  return false;
 }
 
 function isLoopbackHost(host: string): boolean {
@@ -92,23 +135,34 @@ export async function detectLocalIp(discoveryUrl: string): Promise<string> {
 
 export class DiscoveryClient {
   private readonly baseUrl: string;
+  private readonly token?: string;
   private heartbeat: NodeJS.Timeout | null = null;
   private localIpPromise: Promise<string> | null = null;
+  private lastResult: RegisterResponse | null = null;
 
-  constructor(baseUrl: string) {
+  constructor(baseUrl: string, token?: string) {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
+    this.token = token?.trim() || undefined;
   }
 
-  async register(peerId: string, port: number, opts: RegisterOptions = {}): Promise<void> {
+  get observed(): RegisterResponse | null {
+    return this.lastResult;
+  }
+
+  async register(peerId: string, port: number, opts: RegisterOptions = {}): Promise<RegisterResponse> {
     const ip = await this.detectIp();
-    await this.request('POST', '/register', {
+    const response = (await this.request('POST', '/register', {
       peerId,
       port,
       targetPeerId: opts.targetPeerId,
       displayName: opts.displayName,
       webId: opts.webId,
+      publicHost: opts.publicHost,
+      publicPort: opts.publicPort,
       ip: ip || undefined,
-    });
+    })) as RegisterResponse;
+    this.lastResult = response;
+    return response;
   }
 
   async lookup(peerId: string): Promise<PeerEndpoint> {
@@ -120,6 +174,11 @@ export class DiscoveryClient {
   async listPeers(): Promise<OnlinePeer[]> {
     const result = (await this.request('GET', '/peers')) as { peers: OnlinePeer[] };
     return result.peers;
+  }
+
+  /** Minta Discovery Platform menguji apakah port inbound peer ini terjangkau. */
+  async probe(peerId: string): Promise<ProbeResponse> {
+    return (await this.request('GET', `/probe/${encodeURIComponent(peerId)}`)) as ProbeResponse;
   }
 
   async unregister(peerId: string): Promise<void> {
@@ -161,7 +220,10 @@ export class DiscoveryClient {
     try {
       response = await fetch(url, {
         method,
-        headers: body ? { 'content-type': 'application/json' } : undefined,
+        headers: {
+          ...(body ? { 'content-type': 'application/json' } : {}),
+          ...(this.token ? { 'x-p2pod-token': this.token } : {}),
+        },
         body: body ? JSON.stringify(body) : undefined,
         signal: AbortSignal.timeout(5000),
       });

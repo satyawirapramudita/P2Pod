@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  BridgeDefaults,
   ChatSummary,
   OnlinePeerItem,
   PeerAppState,
   PodLoginProgress,
+  ProbeResult,
   ProfileSummary,
   StoredMessage,
   SystemLogEntry,
@@ -18,11 +20,31 @@ export interface SyncFeedback {
   timestamp: number;
 }
 
+export interface CreateProfileParams {
+  displayName: string;
+  discoveryUrl: string;
+  listenPort?: number;
+  podUrl?: string;
+  publicHost?: string;
+  publicPort?: number;
+  discoveryToken?: string;
+}
+
+export interface UpdateNetworkParams {
+  discoveryUrl?: string;
+  listenPort?: number;
+  publicHost?: string | null;
+  publicPort?: number | null;
+  discoveryToken?: string | null;
+}
+
 export interface BridgeClientData {
   wsConnected: boolean;
   loadingInitial: boolean;
   bridgeError: string | null;
   state: PeerAppState | null;
+  needsSetup: boolean;
+  defaults: BridgeDefaults | null;
   onlinePeers: OnlinePeerItem[];
   peersLoading: boolean;
   peersError: string | null;
@@ -33,6 +55,8 @@ export interface BridgeClientData {
   profiles: ProfileSummary[];
   lastSync: SyncFeedback | null;
   syncBusy: boolean;
+  profileBusy: boolean;
+  probeBusy: boolean;
   podLogin: PodLoginProgress;
   selectOfflineChat: (chatId: string | null) => Promise<void>;
   refreshPeers: () => Promise<void>;
@@ -43,6 +67,12 @@ export interface BridgeClientData {
   sendMessage: (text: string) => Promise<void>;
   triggerSync: (chatId?: string) => Promise<void>;
   switchProfile: (homeDir: string) => Promise<void>;
+  createProfile: (params: CreateProfileParams) => Promise<{ warning?: string }>;
+  deleteProfile: (homeDir: string) => Promise<void>;
+  updateProfileNetwork: (params: UpdateNetworkParams) => Promise<void>;
+  detectPublicIp: () => Promise<string | null>;
+  checkDiscovery: (url: string) => Promise<{ ok: boolean; url: string; error?: string }>;
+  probePublicEndpoint: () => Promise<ProbeResult>;
   startPodLogin: (params: {
     mode: 'browser' | 'account';
     issuerUrl?: string;
@@ -75,6 +105,8 @@ export function useBridgeClient(): BridgeClientData {
   const [bridgeError, setBridgeError] = useState<string | null>(null);
 
   const [state, setState] = useState<PeerAppState | null>(null);
+  const [needsSetup, setNeedsSetup] = useState(false);
+  const [defaults, setDefaults] = useState<BridgeDefaults | null>(null);
   const [onlinePeers, setOnlinePeers] = useState<OnlinePeerItem[]>([]);
   const [peersLoading, setPeersLoading] = useState(false);
   const [peersError, setPeersError] = useState<string | null>(null);
@@ -87,6 +119,8 @@ export function useBridgeClient(): BridgeClientData {
 
   const [lastSync, setLastSync] = useState<SyncFeedback | null>(null);
   const [syncBusy, setSyncBusy] = useState(false);
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [probeBusy, setProbeBusy] = useState(false);
   const [podLogin, setPodLogin] = useState<PodLoginProgress>({ status: 'idle' });
 
   const activeSessionChatIdRef = useRef<string | null>(null);
@@ -107,8 +141,9 @@ export function useBridgeClient(): BridgeClientData {
 
   const refreshProfiles = useCallback(async () => {
     try {
-      const data = await apiFetch<{ profiles: ProfileSummary[] }>('/api/profiles');
+      const data = await apiFetch<{ profiles: ProfileSummary[]; needsSetup: boolean }>('/api/profiles');
       setProfiles(data.profiles);
+      setNeedsSetup(Boolean(data.needsSetup));
     } catch {
       // abaikan bila belum tersedia
     }
@@ -145,11 +180,17 @@ export function useBridgeClient(): BridgeClientData {
           const payload = JSON.parse(String(ev.data)) as Record<string, any>;
           switch (payload.type) {
             case 'init': {
-              setState(payload.state as PeerAppState);
+              const nextState = (payload.state as PeerAppState | null) ?? null;
+              setState(nextState);
+              setNeedsSetup(Boolean(payload.needsSetup ?? !nextState));
+              setDefaults((payload.defaults as BridgeDefaults | null) ?? null);
+              if (Array.isArray(payload.profiles)) {
+                setProfiles(payload.profiles as ProfileSummary[]);
+              }
               setChats((payload.chats ?? []) as ChatSummary[]);
               setLogs((payload.logs ?? []) as SystemLogEntry[]);
               setLoadingInitial(false);
-              const activeId = (payload.state as PeerAppState)?.session?.chatId;
+              const activeId = nextState?.session?.chatId;
               if (activeId) {
                 setSelectedChatId(activeId);
                 void loadMessagesForChat(activeId);
@@ -157,9 +198,10 @@ export function useBridgeClient(): BridgeClientData {
               break;
             }
             case 'state': {
-              const nextState = payload.state as PeerAppState;
+              const nextState = (payload.state as PeerAppState | null) ?? null;
               setState(nextState);
-              if (nextState.session?.chatId) {
+              if (nextState) setNeedsSetup(false);
+              if (nextState?.session?.chatId) {
                 setSelectedChatId(nextState.session.chatId);
               }
               break;
@@ -367,6 +409,113 @@ export function useBridgeClient(): BridgeClientData {
     [refreshPeers, refreshProfiles]
   );
 
+  const createProfile = useCallback(
+    async (params: CreateProfileParams): Promise<{ warning?: string }> => {
+      setProfileBusy(true);
+      setBridgeError(null);
+      try {
+        const data = await apiFetch<{ warning?: string }>('/api/profiles/create', {
+          method: 'POST',
+          body: JSON.stringify(params),
+        });
+        await refreshProfiles();
+        await refreshPeers();
+        return { warning: data.warning };
+      } catch (err: any) {
+        setBridgeError(err?.message ?? 'Gagal membuat profil.');
+        throw err;
+      } finally {
+        setProfileBusy(false);
+      }
+    },
+    [refreshPeers, refreshProfiles]
+  );
+
+  const deleteProfile = useCallback(
+    async (homeDir: string) => {
+      setProfileBusy(true);
+      setBridgeError(null);
+      try {
+        await apiFetch('/api/profiles/delete', {
+          method: 'POST',
+          body: JSON.stringify({ homeDir }),
+        });
+        await refreshProfiles();
+      } catch (err: any) {
+        setBridgeError(err?.message ?? 'Gagal menghapus profil.');
+        throw err;
+      } finally {
+        setProfileBusy(false);
+      }
+    },
+    [refreshProfiles]
+  );
+
+  const updateProfileNetwork = useCallback(
+    async (params: UpdateNetworkParams) => {
+      setProfileBusy(true);
+      setBridgeError(null);
+      try {
+        const data = await apiFetch<{ state: PeerAppState | null }>('/api/profile/update', {
+          method: 'POST',
+          body: JSON.stringify(params),
+        });
+        setState(data.state ?? null);
+        await refreshProfiles();
+        await refreshPeers();
+      } catch (err: any) {
+        setBridgeError(err?.message ?? 'Gagal menyimpan pengaturan jaringan.');
+        throw err;
+      } finally {
+        setProfileBusy(false);
+      }
+    },
+    [refreshPeers, refreshProfiles]
+  );
+
+  const detectPublicIp = useCallback(async (): Promise<string | null> => {
+    setBridgeError(null);
+    try {
+      const data = await apiFetch<{ ok: boolean; ip?: string; error?: string }>('/api/network/public-ip');
+      if (!data.ok || !data.ip) {
+        setBridgeError(data.error ?? 'Gagal mendeteksi IP publik.');
+        return null;
+      }
+      return data.ip;
+    } catch (err: any) {
+      setBridgeError(err?.message ?? 'Gagal mendeteksi IP publik.');
+      return null;
+    }
+  }, []);
+
+  const checkDiscovery = useCallback(
+    async (url: string): Promise<{ ok: boolean; url: string; error?: string }> => {
+      const data = await apiFetch<{ ok: boolean; url: string; error?: string }>('/api/discovery/check', {
+        method: 'POST',
+        body: JSON.stringify({ url }),
+      });
+      return data;
+    },
+    []
+  );
+
+  const probePublicEndpoint = useCallback(async (): Promise<ProbeResult> => {
+    setProbeBusy(true);
+    setBridgeError(null);
+    try {
+      const data = await apiFetch<{ result: ProbeResult }>('/api/network/probe', {
+        method: 'POST',
+        body: JSON.stringify({}),
+      });
+      return data.result;
+    } catch (err: any) {
+      setBridgeError(err?.message ?? 'Gagal menguji endpoint publik.');
+      throw err;
+    } finally {
+      setProbeBusy(false);
+    }
+  }, []);
+
   const startPodLogin = useCallback(
     async (params: {
       mode: 'browser' | 'account';
@@ -406,6 +555,8 @@ export function useBridgeClient(): BridgeClientData {
     loadingInitial,
     bridgeError,
     state,
+    needsSetup,
+    defaults,
     onlinePeers,
     peersLoading,
     peersError,
@@ -416,6 +567,8 @@ export function useBridgeClient(): BridgeClientData {
     profiles,
     lastSync,
     syncBusy,
+    profileBusy,
+    probeBusy,
     podLogin,
     selectOfflineChat,
     refreshPeers,
@@ -426,6 +579,12 @@ export function useBridgeClient(): BridgeClientData {
     sendMessage,
     triggerSync,
     switchProfile,
+    createProfile,
+    deleteProfile,
+    updateProfileNetwork,
+    detectPublicIp,
+    checkDiscovery,
+    probePublicEndpoint,
     startPodLogin,
     linkPodIdentity,
     clearBridgeError: () => setBridgeError(null),

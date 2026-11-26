@@ -4,9 +4,16 @@ import { EventEmitter } from 'events';
 import { TcpConnectionManager, ManagedConnection } from '../net/tcpConnection';
 import { CryptoEngine } from '../crypto/cryptoEngine';
 import { TerminalUI } from '../ui/terminalUI';
-import type { AnyMessage, HandshakeMessage, IdentityProofMessage, ChatMessage, OnlinePeer } from '@p2pod/shared';
+import type {
+  AnyMessage,
+  HandshakeMessage,
+  IdentityProofMessage,
+  ChatMessage,
+  OnlinePeer,
+  ProbeResponse,
+} from '@p2pod/shared';
 import { Identity, fingerprintOf, verifyWithPeerId } from '../identity/identity';
-import { DiscoveryClient, detectLocalIp, isValidIpv4 } from '../discovery/discoveryClient';
+import { DiscoveryClient, detectLocalIp, isPrivateIp, isValidHost } from '../discovery/discoveryClient';
 import { ChatSessionMeta, HistoryEntry, SolidClient, StoredMessage } from '../modules/pod/solidClient';
 import { looksLikePeerId, pickPeerBySpec } from '../targetResolver';
 import { ChatSummary, LocalStorage } from '../modules/storage/localStorage';
@@ -21,6 +28,11 @@ export interface PeerAppOptions {
   targetPeerId?: string;
   targetIp?: string;
   targetPort?: number;
+  /** Public host/port advertised to Discovery for cross-network chat. */
+  publicHost?: string;
+  publicPort?: number;
+  /** Optional shared secret required by a public Discovery Platform. */
+  discoveryToken?: string;
   /** 'cli' (default): readline UI + exit on remote close. 'daemon': headless multi-session node. */
   mode?: 'cli' | 'daemon';
 }
@@ -56,6 +68,10 @@ export interface PeerAppState {
     listenPort: number;
     boundPort: number | null;
     localIp: string;
+    publicHost?: string;
+    publicPort?: number;
+    publicEndpoint?: string;
+    observedIp?: string;
   };
   pod: {
     enabled: boolean;
@@ -97,6 +113,8 @@ export class PeerApp extends EventEmitter {
   private readonly localStorage: LocalStorage;
   private readonly syncManager: SyncManager;
   private readonly listenPort: number;
+  private readonly publicHost?: string;
+  private readonly publicPort?: number;
   private targetPort: number;
 
   private pod: SolidClient | null = null;
@@ -136,10 +154,12 @@ export class PeerApp extends EventEmitter {
     this.discoveryUrl = options.discoveryUrl;
     this.mode = options.mode ?? 'cli';
     this.listenPort = options.listenPort;
+    this.publicHost = options.publicHost?.trim().replace(/^\[|\]$/g, '') || undefined;
+    this.publicPort = options.publicPort;
     this.targetPeerId = options.targetPeerId ?? null;
     this.targetIp = options.targetIp ?? null;
     this.targetPort = options.targetPort ?? 5000;
-    this.discovery = new DiscoveryClient(options.discoveryUrl);
+    this.discovery = new DiscoveryClient(options.discoveryUrl, options.discoveryToken);
     this.ui =
       this.mode === 'cli'
         ? new TerminalUI(this.identity.displayName, () => {
@@ -179,6 +199,15 @@ export class PeerApp extends EventEmitter {
       sessionStatus = 'connecting';
     }
 
+    const observedIp = this.discovery.observed?.observedIp;
+    const publicHost =
+      this.publicHost ?? (observedIp && !isPrivateIp(observedIp) ? observedIp : undefined);
+    const publicPort = publicHost
+      ? this.publicPort ?? this.boundPort ?? this.listenPort
+      : undefined;
+    const endpointHost = publicHost?.includes(':') ? `[${publicHost}]` : publicHost;
+    const publicEndpoint = endpointHost && publicPort ? `${endpointHost}:${publicPort}` : undefined;
+
     return {
       nodeStatus: this.nodeRunning ? 'running' : 'stopped',
       sessionStatus,
@@ -191,6 +220,10 @@ export class PeerApp extends EventEmitter {
         listenPort: this.listenPort,
         boundPort: this.boundPort,
         localIp: this.localIp,
+        publicHost,
+        publicPort,
+        publicEndpoint,
+        observedIp,
       },
       pod: {
         enabled: Boolean(this.pod),
@@ -234,11 +267,19 @@ export class PeerApp extends EventEmitter {
     this.emit('system', { text, timestamp: Date.now() });
   }
 
-  private registerOpts(): { targetPeerId?: string; displayName: string; webId?: string } {
+  private registerOpts(): {
+    targetPeerId?: string;
+    displayName: string;
+    webId?: string;
+    publicHost?: string;
+    publicPort?: number;
+  } {
     return {
       targetPeerId: this.targetPeerId ?? undefined,
       displayName: this.identity.displayName,
       webId: this.pod?.webId,
+      publicHost: this.publicHost,
+      publicPort: this.publicPort,
     };
   }
 
@@ -265,9 +306,13 @@ export class PeerApp extends EventEmitter {
     this.localIp = await detectLocalIp(this.discoveryUrl).catch(() => '');
 
     const registerOpts = this.registerOpts();
-    await this.discovery.register(this.identity.peerId, boundPort, registerOpts);
+    try {
+      await this.discovery.register(this.identity.peerId, boundPort, registerOpts);
+      this.emitSystem('Terdaftar di Discovery Platform.');
+    } catch (err: any) {
+      this.emitSystem(`⚠ Discovery Platform belum terjangkau: ${err.message}. Node tetap berjalan dan akan mencoba ulang.`);
+    }
     this.discovery.startHeartbeat(this.identity.peerId, boundPort, registerOpts);
-    this.emitSystem('Terdaftar di Discovery Platform.');
 
     this.emitSystem('Penyimpanan: Local-First aktif (pesan langsung disimpan ke disk lokal).');
     await this.checkAndLinkPod();
@@ -343,8 +388,9 @@ export class PeerApp extends EventEmitter {
     if (target.peerId === this.identity.peerId) {
       throw new Error('Tidak dapat menghubungi Peer ID sendiri.');
     }
-    if (target.ip && !isValidIpv4(target.ip)) {
-      throw new Error(`IP tidak valid: ${target.ip}`);
+    const normalizedTargetIp = target.ip?.trim().replace(/^\[|\]$/g, '');
+    if (normalizedTargetIp && !isValidHost(normalizedTargetIp)) {
+      throw new Error(`Host/IP tidak valid: ${target.ip}`);
     }
 
     // Jika sudah terhubung dengan peer yang sama, tidak perlu reconnect
@@ -359,7 +405,7 @@ export class PeerApp extends EventEmitter {
 
     this.cancelConnect();
     this.targetPeerId = target.peerId;
-    this.targetIp = target.ip ?? null;
+    this.targetIp = normalizedTargetIp || null;
     this.targetLabel = target.label ?? null;
     if (target.port !== undefined) {
       this.targetPort = target.port;
@@ -498,6 +544,10 @@ export class PeerApp extends EventEmitter {
   async getOnlinePeers(): Promise<OnlinePeer[]> {
     const peers = await this.discovery.listPeers();
     return peers.filter((peer) => peer.peerId !== this.identity.peerId);
+  }
+
+  async probePublicEndpoint(): Promise<ProbeResponse> {
+    return this.discovery.probe(this.identity.peerId);
   }
 
   listChats(): ChatSummary[] {
@@ -970,7 +1020,7 @@ export class PeerApp extends EventEmitter {
   private printHelp(): void {
     this.emitSystem('Perintah yang tersedia:');
     console.log('  /connect <nama|PeerID>   Hubungi user (nama dari /list, atau Peer ID)');
-    console.log('  /connect <IP> <PeerID>   Hubungi langsung tanpa Discovery (TCP langsung ke IP)');
+    console.log('  /connect <host> <PeerID> Hubungi langsung tanpa Discovery (TCP langsung ke host/IP)');
     console.log('  /list                    Tampilkan user yang sedang online');
     console.log('  /sync                    Sinkronkan riwayat chat lokal dengan Solid Pod');
     console.log('  /history                 Tampilkan statistik riwayat percakapan lokal');
@@ -1025,14 +1075,14 @@ export class PeerApp extends EventEmitter {
 
     const parts = text.trim().split(/\s+/).slice(1);
     if (parts.length === 0) {
-      this.emitSystem('Penggunaan: /connect <nama|PeerID>  |  /connect <IP> <PeerID>');
+      this.emitSystem('Penggunaan: /connect <nama|PeerID>  |  /connect <host/IP> <PeerID>');
       return;
     }
 
     if (parts.length >= 2) {
       const [ip, peerId] = parts;
-      if (!isValidIpv4(ip)) {
-        this.emitSystem(`IP tidak valid: ${ip}`);
+      if (!isValidHost(ip)) {
+        this.emitSystem(`Host/IP tidak valid: ${ip}`);
         return;
       }
       if (!looksLikePeerId(peerId)) {

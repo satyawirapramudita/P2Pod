@@ -13,29 +13,34 @@ import {
 } from '../components/ui/Primitives';
 import { PeerTopologyGraph } from '../components/ui/PeerTopologyGraph';
 import { NumberedTerminalStream } from '../components/ui/NumberedTerminalStream';
+import { ProfileSetupForm } from '../components/ProfileSetupForm';
 import { BridgeClientData } from '../hooks/useBridgeClient';
-import { ChatSummary } from '../types/bridge';
+import { ChatSummary, ProbeResult } from '../types/bridge';
 
 export interface ConsolePageProps {
   bridge: BridgeClientData;
-  onNavigateStyleguide: () => void;
 }
 
-function isValidIpv4Input(ip: string): boolean {
-  const parts = ip.trim().split('.');
-  if (parts.length !== 4) return false;
-  return parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) <= 255);
+function isValidHostInput(host: string): boolean {
+  const value = host.trim().replace(/^\[|\]$/g, '');
+  if (!value || value.length > 253 || /\s/.test(value)) return false;
+  if (value === 'localhost') return true;
+  if (value.includes(':')) return /^[0-9a-fA-F:]+$/.test(value);
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(value)) {
+    return value.split('.').every((p) => /^\d{1,3}$/.test(p) && Number(p) <= 255);
+  }
+  return /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$/.test(
+    value
+  );
 }
 
-export function ConsolePage({
-  bridge,
-  onNavigateStyleguide,
-}: ConsolePageProps): React.ReactElement {
+export function ConsolePage({ bridge }: ConsolePageProps): React.ReactElement {
   const {
     wsConnected,
     loadingInitial,
     bridgeError,
     state,
+    defaults,
     onlinePeers,
     peersLoading,
     peersError,
@@ -46,6 +51,8 @@ export function ConsolePage({
     profiles,
     lastSync,
     syncBusy,
+    profileBusy,
+    probeBusy,
     podLogin,
     selectOfflineChat,
     refreshPeers,
@@ -55,6 +62,11 @@ export function ConsolePage({
     sendMessage,
     triggerSync,
     switchProfile,
+    createProfile,
+    deleteProfile,
+    updateProfileNetwork,
+    detectPublicIp,
+    probePublicEndpoint,
     startPodLogin,
     linkPodIdentity,
     clearBridgeError,
@@ -71,12 +83,24 @@ export function ConsolePage({
   const [profileModalOpen, setProfileModalOpen] = useState(false);
   const [podModalOpen, setPodModalOpen] = useState(false);
   const [directModalOpen, setDirectModalOpen] = useState(false);
+  const [networkModalOpen, setNetworkModalOpen] = useState(false);
+  const [showCreateProfile, setShowCreateProfile] = useState(false);
 
   // Direct Connect Form
   const [directIp, setDirectIp] = useState('');
   const [directPort, setDirectPort] = useState('5000');
   const [directPeerId, setDirectPeerId] = useState('');
   const [directError, setDirectError] = useState<string | null>(null);
+
+  // Network settings form
+  const [networkDiscoveryUrl, setNetworkDiscoveryUrl] = useState('');
+  const [networkListenPort, setNetworkListenPort] = useState('5000');
+  const [networkPublicHost, setNetworkPublicHost] = useState('');
+  const [networkPublicPort, setNetworkPublicPort] = useState('');
+  const [networkDiscoveryToken, setNetworkDiscoveryToken] = useState('');
+  const [networkError, setNetworkError] = useState<string | null>(null);
+  const [probeResult, setProbeResult] = useState<ProbeResult | null>(null);
+  const [detectingIp, setDetectingIp] = useState(false);
 
   // Pod Login Form
   const [podAuthMode, setPodAuthMode] = useState<'browser' | 'account'>('browser');
@@ -128,8 +152,8 @@ export function ConsolePage({
 
   const handleDirectSubmit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault();
-    if (!isValidIpv4Input(directIp)) {
-      setDirectError('Masukkan alamat IPv4 yang valid (contoh: 192.168.1.15).');
+    if (!isValidHostInput(directIp)) {
+      setDirectError('Masukkan alamat IPv4/IPv6 atau hostname yang valid.');
       return;
     }
     const portNum = Number(directPort);
@@ -174,6 +198,82 @@ export function ConsolePage({
     }
   };
 
+  const openNetworkModal = (): void => {
+    setNetworkDiscoveryUrl(state?.local.discoveryUrl ?? defaults?.discoveryUrl ?? 'http://localhost:4000');
+    setNetworkListenPort(String(state?.local.listenPort ?? defaults?.listenPort ?? 5000));
+    setNetworkPublicHost(state?.local.publicHost ?? '');
+    setNetworkPublicPort(state?.local.publicPort ? String(state.local.publicPort) : '');
+    setNetworkDiscoveryToken('');
+    setNetworkError(null);
+    setProbeResult(null);
+    setNetworkModalOpen(true);
+  };
+
+  const handleNetworkSubmit = async (e: React.FormEvent): Promise<void> => {
+    e.preventDefault();
+    setNetworkError(null);
+    const portNum = Number(networkListenPort);
+    if (!Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
+      setNetworkError('Port TCP harus berupa angka antara 1 sampai 65535.');
+      return;
+    }
+    const publicPortNum = networkPublicPort.trim() ? Number(networkPublicPort) : null;
+    if (
+      publicPortNum !== null &&
+      (!Number.isInteger(publicPortNum) || publicPortNum < 1 || publicPortNum > 65535)
+    ) {
+      setNetworkError('Port publik harus berupa angka antara 1 sampai 65535.');
+      return;
+    }
+    if (networkPublicHost.trim() && !isValidHostInput(networkPublicHost)) {
+      setNetworkError('Public host tidak valid. Gunakan IP, IPv6, atau hostname.');
+      return;
+    }
+
+    try {
+      await updateProfileNetwork({
+        discoveryUrl: networkDiscoveryUrl.trim(),
+        listenPort: portNum,
+        publicHost: networkPublicHost.trim() || null,
+        publicPort: publicPortNum,
+        discoveryToken: networkDiscoveryToken.trim() ? networkDiscoveryToken.trim() : undefined,
+      });
+      setNetworkModalOpen(false);
+    } catch (err: any) {
+      setNetworkError(err?.message ?? 'Gagal menyimpan pengaturan jaringan.');
+    }
+  };
+
+  const handleDetectPublicIp = async (): Promise<void> => {
+    setDetectingIp(true);
+    try {
+      const ip = await detectPublicIp();
+      if (ip) setNetworkPublicHost(ip);
+    } finally {
+      setDetectingIp(false);
+    }
+  };
+
+  const handleProbe = async (): Promise<void> => {
+    try {
+      const result = await probePublicEndpoint();
+      setProbeResult(result);
+    } catch {
+      // bridgeError sudah diisi
+    }
+  };
+
+  const handleDeleteProfile = async (homeDir: string, name: string): Promise<void> => {
+    if (!window.confirm(`Hapus profil "${name}" dari perangkat ini? Data Solid Pod tidak ikut terhapus.`)) {
+      return;
+    }
+    try {
+      await deleteProfile(homeDir);
+    } catch {
+      // bridgeError sudah diisi
+    }
+  };
+
   if (loadingInitial && !state) {
     return (
       <main className="console-shell">
@@ -194,7 +294,7 @@ export function ConsolePage({
           <StatusBanner
             tone="error"
             title="WebBridge Lokal Belum Aktif"
-            description="Jalankan perintah `npm run user:web` di terminal proyek P2Pod untuk menyalakan node P2P lokal."
+            description="Node lokal belum aktif. Jalankan aplikasi P2Pod (Docker atau npm run user:web) lalu muat ulang halaman ini."
             actionLabel="Muat Ulang Halaman"
             onAction={() => window.location.reload()}
           />
@@ -221,7 +321,7 @@ export function ConsolePage({
               <span>{state.local.displayName}</span>
             </div>
             <div style={{ fontSize: '0.75rem', color: 'var(--ink-secondary)' }}>
-              {`FP: ${state.local.fingerprint} · TCP:${state.local.boundPort ?? state.local.listenPort} · LAN:${state.local.localIp || 'loopback'}`}
+              {`FP: ${state.local.fingerprint} · TCP:${state.local.boundPort ?? state.local.listenPort} · PUB:${state.local.publicEndpoint ?? 'auto'} · LAN:${state.local.localIp || 'loopback'}`}
             </div>
           </div>
           <SyntaxTagBadge
@@ -237,15 +337,15 @@ export function ConsolePage({
           <Button variant="secondary" size="sm" onClick={() => setProfileModalOpen(true)}>
             {`[PROFIL: ${profiles.length || 1}]`}
           </Button>
+          <Button variant={state.local.publicEndpoint ? 'cyan' : 'secondary'} size="sm" onClick={openNetworkModal}>
+            {state.local.publicEndpoint ? '[NETWORK: PUBLIK]' : '[NETWORK]'}
+          </Button>
           <Button
             variant={state.pod.enabled && state.pod.reachable ? 'cyan' : 'secondary'}
             size="sm"
             onClick={() => setPodModalOpen(true)}
           >
             {state.pod.enabled ? '[SOLID POD: AKTIF]' : '[SETUP POD]'}
-          </Button>
-          <Button variant="ghost" size="sm" onClick={onNavigateStyleguide}>
-            [STYLEGUIDE]
           </Button>
         </nav>
       </header>
@@ -276,9 +376,9 @@ export function ConsolePage({
                 variant="ghost"
                 size="sm"
                 onClick={() => setDirectModalOpen(true)}
-                aria-label="Hubungkan langsung via IP dan Peer ID"
+                aria-label="Hubungkan langsung via host/IP dan Peer ID"
               >
-                [+IP]
+                [+HOST]
               </Button>
             }
             statusBarLeft={`DISCOVERY: ${state.local.discoveryUrl}`}
@@ -297,7 +397,7 @@ export function ConsolePage({
               <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-xs)', flex: 1 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span style={{ fontSize: '0.75rem', color: 'var(--ink-secondary)' }}>
-                    {peersLoading ? 'Memindai Discovery...' : `${onlinePeers.length} peer aktif di LAN`}
+                    {peersLoading ? 'Memindai Discovery...' : `${onlinePeers.length} peer aktif di discovery`}
                   </span>
                   <Button variant="ghost" size="sm" onClick={() => void refreshPeers()}>
                     [SEGARKAN]
@@ -308,15 +408,15 @@ export function ConsolePage({
                   <StatusBanner
                     tone="error"
                     title="Discovery Tidak Terjangkau"
-                    description={`${peersError} Anda tetap bisa memakai tombol [+IP] untuk koneksi TCP langsung.`}
+                    description={`${peersError} Anda tetap bisa memakai tombol [+HOST] untuk koneksi TCP langsung.`}
                     actionLabel="Coba Lagi"
                     onAction={() => void refreshPeers()}
                   />
                 ) : onlinePeers.length === 0 ? (
                   <StatusBanner
                     title="Belum Ada Peer Lain Online"
-                    description="Pastikan rekan satu LAN mendaftar ke URL Discovery yang sama, atau gunakan koneksi Direct IP."
-                    actionLabel="Hubungkan Direct IP"
+                    description="Pastikan rekan memakai URL Discovery yang sama dan port publiknya bisa dijangkau, atau gunakan Direct Host/IP."
+                    actionLabel="Hubungkan Direct Host/IP"
                     onAction={() => setDirectModalOpen(true)}
                   />
                 ) : (
@@ -584,6 +684,10 @@ export function ConsolePage({
                     {state.local.displayName}
                   </div>
                   <div>
+                    <span style={{ color: 'var(--accent-secondary)' }}>PUBLIC_ENDPOINT :</span>{' '}
+                    {state.local.publicEndpoint ?? '(auto — belum terlihat publik; atur di Network)'}
+                  </div>
+                  <div>
                     <span style={{ color: 'var(--accent-secondary)' }}>LAN_ENDPOINT :</span>{' '}
                     {`${state.local.localIp || '127.0.0.1'}:${state.local.boundPort ?? state.local.listenPort}`}
                   </div>
@@ -605,7 +709,10 @@ export function ConsolePage({
                     Cari Peer Online
                   </Button>
                   <Button variant="secondary" onClick={() => setDirectModalOpen(true)}>
-                    Hubungkan Direct IP
+                    Hubungkan Direct Host/IP
+                  </Button>
+                  <Button variant="secondary" onClick={openNetworkModal}>
+                    Pengaturan Network
                   </Button>
                   <Button variant="cyan" onClick={() => setPodModalOpen(true)}>
                     Kelola Solid Pod
@@ -779,44 +886,92 @@ export function ConsolePage({
         </button>
       </nav>
 
-      {/* MODAL 1: SWITCH PROFILE */}
+      {/* MODAL 1: SWITCH / CREATE / DELETE PROFILE */}
       <ModalDialog
         open={profileModalOpen}
-        title="PROFILES // GANTI IDENTITAS AKTIF"
-        onClose={() => setProfileModalOpen(false)}
+        title="PROFILES // IDENTITAS LOKAL"
+        onClose={() => {
+          setShowCreateProfile(false);
+          setProfileModalOpen(false);
+        }}
       >
         <p style={{ margin: 0, fontSize: '0.875rem', color: 'var(--ink-secondary)' }}>
-          Pilih profil lokal untuk mengganti identitas Ed25519, port TCP, dan ruang penyimpanan tanpa
-          mematikan Web UI.
+          Pilih profil lokal untuk mengganti identitas Ed25519, port TCP, dan ruang penyimpanan
+          tanpa mematikan Web UI.
         </p>
-        <div className="roster-list">
-          {profiles.map((prof) => (
-            <button
-              key={prof.homeDir}
-              type="button"
-              disabled={!prof.complete}
-              className={`roster-item ${prof.isActive ? 'roster-item--selected' : ''}`.trim()}
-              onClick={async () => {
-                if (!prof.isActive && prof.complete) {
-                  await switchProfile(prof.homeDir);
-                }
+
+        {!showCreateProfile ? (
+          <div className="sg-row" style={{ justifyContent: 'flex-end' }}>
+            <Button variant="cyan" size="sm" onClick={() => setShowCreateProfile(true)}>
+              [+ PROFIL BARU]
+            </Button>
+          </div>
+        ) : (
+          <div
+            style={{
+              border: '1px solid var(--border-subtle)',
+              padding: 'var(--space-sm)',
+              backgroundColor: 'var(--surface-canvas)',
+            }}
+          >
+            <ProfileSetupForm
+              bridge={bridge}
+              submitLabel="Buat & Aktifkan Profil"
+              onCreated={() => {
+                setShowCreateProfile(false);
                 setProfileModalOpen(false);
               }}
+            />
+          </div>
+        )}
+
+        <div className="roster-list">
+          {profiles.map((prof) => (
+            <div
+              key={prof.homeDir}
+              style={{ display: 'flex', alignItems: 'stretch', gap: 'var(--space-xs)' }}
             >
-              <div className="roster-item__main">
-                <PixelIdenticon seed={prof.fingerprint} size={32} />
-                <div className="roster-item__info">
-                  <div className="roster-item__name">{prof.name}</div>
-                  <div className="roster-item__sub">
-                    {`${prof.fingerprint || 'tanpa-key'} · port ${prof.listenPort ?? '-'}`}
+              <button
+                type="button"
+                disabled={!prof.complete || profileBusy}
+                className={`roster-item ${prof.isActive ? 'roster-item--selected' : ''}`.trim()}
+                style={{ flex: 1 }}
+                onClick={async () => {
+                  if (!prof.isActive && prof.complete) {
+                    await switchProfile(prof.homeDir);
+                  }
+                  setProfileModalOpen(false);
+                }}
+              >
+                <div className="roster-item__main">
+                  <PixelIdenticon seed={prof.fingerprint} size={32} />
+                  <div className="roster-item__info">
+                    <div className="roster-item__name">{prof.name}</div>
+                    <div className="roster-item__sub">
+                      {`${prof.fingerprint || 'tanpa-key'} · port ${prof.listenPort ?? '-'}`}
+                    </div>
+                    <div className="roster-item__sub">
+                      {prof.publicHost
+                        ? `public: ${prof.publicHost}:${prof.publicPort ?? prof.listenPort ?? '-'}`
+                        : 'public: auto'}
+                    </div>
                   </div>
                 </div>
-              </div>
-              <SyntaxTagBadge
-                label={prof.isActive ? 'AKTIF' : prof.complete ? 'PILIH' : 'BELUM SIAP'}
-                tone={prof.isActive ? 'success' : prof.complete ? 'cyan' : 'muted'}
-              />
-            </button>
+                <SyntaxTagBadge
+                  label={prof.isActive ? 'AKTIF' : prof.complete ? 'PILIH' : 'BELUM SIAP'}
+                  tone={prof.isActive ? 'success' : prof.complete ? 'cyan' : 'muted'}
+                />
+              </button>
+              <Button
+                variant="danger"
+                size="sm"
+                disabled={prof.isActive || !prof.complete || profileBusy}
+                onClick={() => void handleDeleteProfile(prof.homeDir, prof.name)}
+                title={prof.isActive ? 'Pindah profil sebelum menghapus' : 'Hapus profil'}
+              >
+                [HAPUS]
+              </Button>
+            </div>
           ))}
         </div>
       </ModalDialog>
@@ -832,14 +987,14 @@ export function ConsolePage({
           style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-sm)' }}
         >
           <InputField
-            label="Alamat IPv4 Peer Tujuan"
-            placeholder="192.168.1.15"
+            label="Host / IP Peer Tujuan"
+            placeholder="192.168.1.15 atau peer.example.com"
             value={directIp}
             onChange={(e) => setDirectIp(e.target.value)}
           />
           <InputField
             label="Port TCP Tujuan"
-            placeholder="5000"
+            placeholder="5000 (atau port publik hasil port-forward)"
             value={directPort}
             onChange={(e) => setDirectPort(e.target.value)}
           />
@@ -861,7 +1016,142 @@ export function ConsolePage({
         </form>
       </ModalDialog>
 
-      {/* MODAL 3: SOLID POD LOGIN & LINK */}
+      {/* MODAL 3: NETWORK / PUBLIC ENDPOINT */}
+      <ModalDialog
+        open={networkModalOpen}
+        title="NETWORK // DISCOVERY & PUBLIC ENDPOINT"
+        onClose={() => setNetworkModalOpen(false)}
+      >
+        <form
+          onSubmit={(e) => void handleNetworkSubmit(e)}
+          style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-sm)' }}
+        >
+          <p style={{ margin: 0, fontSize: '0.8125rem', color: 'var(--ink-secondary)' }}>
+            Agar peer di jaringan lain bisa menghubungi Anda, port TCP ini harus bisa dijangkau dari
+            internet (port-forward router atau publish Docker). Menyimpan perubahan akan me-restart
+            node dan memutus sesi chat yang sedang aktif.
+          </p>
+
+          <div
+            style={{
+              border: '1px solid var(--border-subtle)',
+              backgroundColor: 'var(--surface-canvas)',
+              padding: 'var(--space-sm)',
+              fontSize: '0.8125rem',
+            }}
+          >
+            <div>
+              <span style={{ color: 'var(--accent-secondary)' }}>PUBLIC_ENDPOINT :</span>{' '}
+              {state.local.publicEndpoint ?? '(auto — belum publik)'}
+            </div>
+            <div>
+              <span style={{ color: 'var(--accent-secondary)' }}>OBSERVED_IP :</span>{' '}
+              {state.local.observedIp ?? '(belum terdaftar)'}
+            </div>
+            <div>
+              <span style={{ color: 'var(--accent-secondary)' }}>PEER_ID :</span>{' '}
+              <span style={{ wordBreak: 'break-all' }}>{state.local.peerId}</span>
+            </div>
+          </div>
+
+          <InputField
+            label="URL Discovery Platform"
+            value={networkDiscoveryUrl}
+            onChange={(e) => setNetworkDiscoveryUrl(e.target.value)}
+            helperText="Server yang sama harus dipakai semua peer."
+          />
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+              gap: 'var(--space-sm)',
+            }}
+          >
+            <InputField
+              label="Port TCP listener"
+              type="number"
+              min={1}
+              max={65535}
+              value={networkListenPort}
+              onChange={(e) => setNetworkListenPort(e.target.value)}
+            />
+            <InputField
+              label="Port publik"
+              type="number"
+              min={1}
+              max={65535}
+              placeholder="kosong = sama dengan port listener"
+              value={networkPublicPort}
+              onChange={(e) => setNetworkPublicPort(e.target.value)}
+            />
+          </div>
+
+          <InputField
+            label="Public host / IP"
+            placeholder="203.0.113.10 atau p2pod.example.com"
+            value={networkPublicHost}
+            onChange={(e) => setNetworkPublicHost(e.target.value)}
+            helperText="Kosongkan untuk memakai IP yang diamati Discovery. Isi manual untuk Docker/port-forward."
+          />
+
+          <div className="sg-row">
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={detectingIp}
+              onClick={() => void handleDetectPublicIp()}
+            >
+              {detectingIp ? '[MENDETEKSI...]' : '[DETEKSI IP PUBLIK]'}
+            </Button>
+            <Button variant="cyan" size="sm" disabled={probeBusy} onClick={() => void handleProbe()}>
+              {probeBusy ? '[MENGUJI...]' : '[UJI PORT PUBLIK]'}
+            </Button>
+            {probeResult ? (
+              <span
+                style={{
+                  fontSize: '0.75rem',
+                  color: probeResult.reachable ? 'var(--status-success)' : 'var(--status-danger)',
+                }}
+              >
+                {probeResult.reachable
+                  ? `Port terjangkau (${probeResult.host}:${probeResult.port})`
+                  : `Tidak terjangkau: ${probeResult.error ?? 'timeout'}`}
+              </span>
+            ) : null}
+          </div>
+
+          <InputField
+            label="Token Discovery (opsional)"
+            type="password"
+            placeholder="Kosongkan untuk mempertahankan token yang tersimpan"
+            value={networkDiscoveryToken}
+            onChange={(e) => setNetworkDiscoveryToken(e.target.value)}
+          />
+
+          {probeResult && !probeResult.reachable ? (
+            <StatusBanner
+              tone="warning"
+              title="Port publik belum terjangkau"
+              description="Periksa firewall, port-forward router (TCP listener → host), dan pastikan public host/port benar. Jika Anda di CGNAT, koneksi masuk tidak akan bekerja tanpa relay."
+            />
+          ) : null}
+
+          {networkError ? (
+            <StatusBanner tone="error" title="Pengaturan gagal" description={networkError} />
+          ) : null}
+
+          <div className="sg-row" style={{ justifyContent: 'flex-end' }}>
+            <Button variant="ghost" onClick={() => setNetworkModalOpen(false)}>
+              Batal
+            </Button>
+            <Button type="submit" variant="primary" disabled={profileBusy}>
+              {profileBusy ? 'Menyimpan...' : 'Simpan & Restart Node'}
+            </Button>
+          </div>
+        </form>
+      </ModalDialog>
+
+      {/* MODAL 4: SOLID POD LOGIN & LINK */}
       <ModalDialog
         open={podModalOpen}
         title="SOLID POD // LOGIN & WEBID LINKING"

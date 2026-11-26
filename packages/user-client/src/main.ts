@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { PeerApp } from './core/peerApp';
 import { Identity, defaultHomeDir, ensureDir, fingerprintOf } from './identity/identity';
-import { DiscoveryClient, detectLocalIp, isValidIpv4 } from './discovery/discoveryClient';
+import { DiscoveryClient, detectLocalIp, isValidHost } from './discovery/discoveryClient';
 import { loadConfig, UserConfig } from './config';
 import { runWizard } from './wizard';
 import { resolveTarget } from './targetResolver';
@@ -12,6 +12,7 @@ import { runEdit, runProfiles, runRemove, runSwitch } from './profiles';
 import { resolveProfileHome, setActiveProfile } from './activeProfile';
 import { createPrompter } from './prompt';
 import { ensureLocalCssRunning, localCssPortOf, podNameFromDisplayName } from './modules/pod/provision';
+import { profileRoot } from './profileSetup';
 import { runPodLink, runPodLogin } from './podCli';
 import { WebBridge } from './web/webBridge';
 import { openBrowser } from './modules/pod/solidAuth';
@@ -42,6 +43,10 @@ interface CliOptions {
   podUrl?: string;
   podDisabled: boolean;
   discoveryUrl?: string;
+  publicHost?: string;
+  publicPort?: number;
+  discoveryToken?: string;
+  uiHost?: string;
   homeDir: string;
   homeExplicit: boolean;
   displayName?: string;
@@ -122,8 +127,20 @@ function parseArgs(argv: string[]): CliOptions {
       case '--ui-port':
         opts.uiPort = parseInt(value(), 10);
         break;
+      case '--ui-host':
+        opts.uiHost = value();
+        break;
       case '--no-open':
         opts.noOpen = true;
+        break;
+      case '--public-host':
+        opts.publicHost = value();
+        break;
+      case '--public-port':
+        opts.publicPort = parseInt(value(), 10);
+        break;
+      case '--discovery-token':
+        opts.discoveryToken = value();
         break;
       case '--peer-ip':
         opts.peerIp = value();
@@ -193,8 +210,9 @@ function printUsage(): void {
   console.log('  Solid Login        : npm run pod:login [-- --issuer https://solidcommunity.net [--browser | --email <e> --password <p>]]');
   console.log('                       (login & kredensial ditautkan ke profil AKTIF)');
   console.log('  Solid Link         : npm run pod:link [-- --home <dir> --pod <url>]');
-  console.log('  Setup user (lama)  : npm run role:user [-- --name <nama> --discovery <url> [--pod <url> | --no-pod]]');
-  console.log('  Tunggu koneksi     : npm start -- --listen [--port 5000] [--pod <pod-url>] [--discovery <url>] [--home <dir>] [--name <nama>]');
+  console.log('  Web UI (utama)     : npm run user:web [-- --home <dir> --port 5000 --ui-port 3333 --ui-host 127.0.0.1 --public-host <ip/domain>]');
+  console.log('  Tunggu koneksi     : npm run user -- [--listen] [--port 5000] [--pod <pod-url>] [--discovery <url>] [--home <dir>] [--name <nama>]');
+  console.log('  Jaringan publik    : tambahkan --public-host <ip/domain> --public-port <port> [--discovery-token <token>]');
   console.log('  Hubungi user       : npm run user:connect -- <nama|PeerID> [--peer-ip <ip> --peer-port <n>]');
   console.log('  User online        : npm run user:list [--discovery <url>]');
   console.log('  User di device     : npm run user:profiles | user:edit | user:remove');
@@ -239,7 +257,7 @@ async function resolveAddTarget(opts: CliOptions): Promise<{ homeDir: string; di
     }
   }
 
-  const base = path.join(process.cwd(), '.p2pod');
+  const base = profileRoot();
   const slug = podNameFromDisplayName(name);
   let candidate = path.join(base, slug);
   let suffix = 2;
@@ -277,7 +295,8 @@ async function runList(discoveryUrl: string): Promise<void> {
   for (const peer of peers) {
     const name = (peer.displayName ?? '(tanpa nama)').padEnd(16);
     const webIdInfo = peer.webId ? `  [${peer.webId}]` : '';
-    console.log(`  ${name} ${fingerprintOf(peer.peerId)}  ${peer.peerId}${webIdInfo}`);
+    const endpointInfo = peer.publicEndpoint ? `  @${peer.publicEndpoint}` : '';
+    console.log(`  ${name} ${fingerprintOf(peer.peerId)}  ${peer.peerId}${endpointInfo}${webIdInfo}`);
   }
   console.log('');
   console.log('Hubungi salah satu dengan: npm run user:connect -- <nama|PeerID>');
@@ -289,6 +308,9 @@ interface StartParams {
   discoveryUrl: string;
   listenPort: number;
   podUrl?: string;
+  publicHost?: string;
+  publicPort?: number;
+  discoveryToken?: string;
   targetPeerId?: string;
   targetIp?: string;
   targetPort?: number;
@@ -314,6 +336,13 @@ async function startApp(params: StartParams): Promise<void> {
   console.log(`[P2Pod] home        : ${params.homeDir}`);
   console.log(`[P2Pod] discovery   : ${params.discoveryUrl}`);
   console.log(`[P2Pod] port TCP    : ${params.listenPort}`);
+  console.log(
+    `[P2Pod] endpoint    : ${
+      params.publicHost
+        ? `${params.publicHost}:${params.publicPort ?? params.listenPort} (publik dikonfigurasi)`
+        : 'otomatis via IP yang diamati Discovery (atur --public-host untuk Docker/NAT)'
+    }`
+  );
   console.log(`[P2Pod] pod         : ${params.podUrl ?? '(nonaktif — history tidak disimpan)'}`);
   if (params.podUrl && storedConfig?.pod?.webId) {
     console.log(`[P2Pod] WebID       : ${storedConfig.pod.webId}`);
@@ -329,7 +358,11 @@ async function startApp(params: StartParams): Promise<void> {
   );
   console.log('');
   console.log(
-    `[P2Pod] Bagikan ke user lain → nama: ${params.identity.displayName} · IP: ${localIp || '(?)'} · Peer ID: ${params.identity.peerId}`
+    `[P2Pod] Bagikan ke user lain → nama: ${params.identity.displayName} · endpoint: ${
+      params.publicHost
+        ? `${params.publicHost}:${params.publicPort ?? params.listenPort}`
+        : `${localIp || '(?)'}:${params.listenPort}`
+    } · Peer ID: ${params.identity.peerId}`
   );
   console.log('[P2Pod] Hubungi user lain → /connect <nama|PeerID>  atau  npm run user:connect -- <nama|PeerID>');
   console.log('');
@@ -340,6 +373,9 @@ async function startApp(params: StartParams): Promise<void> {
     discoveryUrl: params.discoveryUrl,
     podUrl: params.podUrl,
     listenPort: params.listenPort,
+    publicHost: params.publicHost,
+    publicPort: params.publicPort,
+    discoveryToken: params.discoveryToken,
     targetPeerId: params.targetPeerId,
     targetIp: params.targetIp,
     targetPort: params.targetPort,
@@ -350,6 +386,12 @@ async function startApp(params: StartParams): Promise<void> {
 
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv);
+  if (opts.publicPort !== undefined) {
+    validatePort(opts.publicPort, 'Port publik');
+  }
+  if (opts.publicHost && !isValidHost(opts.publicHost)) {
+    throw new Error(`--public-host tidak valid: ${opts.publicHost}`);
+  }
 
   if (opts.command === 'list') {
     const homeDir = resolvedHome(opts);
@@ -371,6 +413,9 @@ async function main(): Promise<void> {
       listenPort: opts.port,
       podUrl: opts.podUrl,
       podDisabled: opts.podDisabled,
+      publicHost: opts.publicHost,
+      publicPort: opts.publicPort,
+      discoveryToken: opts.discoveryToken,
     });
     return;
   }
@@ -422,6 +467,9 @@ async function main(): Promise<void> {
       listenPort: opts.port,
       podUrl: opts.podUrl,
       podDisabled: opts.podDisabled,
+      publicHost: opts.publicHost,
+      publicPort: opts.publicPort,
+      discoveryToken: opts.discoveryToken,
       reconfigure: false,
     });
     setActiveProfile(homeDir, identity.displayName);
@@ -433,6 +481,9 @@ async function main(): Promise<void> {
       discoveryUrl: config.discoveryUrl,
       listenPort: config.listenPort,
       podUrl: config.pod.enabled ? config.pod.podUrl : undefined,
+      publicHost: config.network?.publicHost,
+      publicPort: config.network?.publicPort,
+      discoveryToken: config.network?.discoveryToken,
     });
     return;
   }
@@ -446,6 +497,9 @@ async function main(): Promise<void> {
       listenPort: opts.port,
       podUrl: opts.podUrl,
       podDisabled: opts.podDisabled,
+      publicHost: opts.publicHost,
+      publicPort: opts.publicPort,
+      discoveryToken: opts.discoveryToken,
       reconfigure: opts.reconfigure,
     });
     setActiveProfile(homeDir, identity.displayName);
@@ -455,17 +509,23 @@ async function main(): Promise<void> {
       discoveryUrl: config.discoveryUrl,
       listenPort: config.listenPort,
       podUrl: config.pod.enabled ? config.pod.podUrl : undefined,
+      publicHost: config.network?.publicHost,
+      publicPort: config.network?.publicPort,
+      discoveryToken: config.network?.discoveryToken,
     });
     return;
   }
 
   if (opts.command === 'web') {
-    const homeDir = resolvedHome(opts, true);
+    const homeDir = resolvedHome(opts);
     if (opts.uiPort !== undefined) {
       validatePort(opts.uiPort, 'Port Web UI');
     }
     if (opts.port !== undefined) {
       validatePort(opts.port, 'Port TCP');
+    }
+    if (opts.publicPort !== undefined) {
+      validatePort(opts.publicPort, 'Port publik');
     }
 
     const staticCandidate = path.join(process.cwd(), 'packages', 'web-ui', 'dist');
@@ -478,18 +538,33 @@ async function main(): Promise<void> {
       listenPort: opts.port,
       podUrl: opts.podUrl,
       podDisabled: opts.podDisabled,
+      publicHost: opts.publicHost,
+      publicPort: opts.publicPort,
+      discoveryToken: opts.discoveryToken,
       uiPort: opts.uiPort,
+      uiHost: opts.uiHost,
       staticDir: hasStaticBuild ? staticCandidate : undefined,
     });
 
-    const { url, state } = await bridge.start();
+    const { url, state, needsSetup } = await bridge.start();
     console.log('');
-    console.log(`[P2Pod Web] User        : ${state.local.displayName} [${state.local.fingerprint}]`);
-    console.log(`[P2Pod Web] Home        : ${state.local.homeDir}`);
-    console.log(`[P2Pod Web] Discovery   : ${state.local.discoveryUrl}`);
-    console.log(`[P2Pod Web] TCP Listen  : port ${state.local.boundPort}`);
-    console.log(`[P2Pod Web] Solid Pod   : ${state.pod.enabled ? state.pod.podUrl : '(nonaktif)'}`);
-    console.log(`[P2Pod Web] Bridge URL  : ${url} (hanya localhost 127.0.0.1)`);
+    if (state) {
+      console.log(`[P2Pod Web] User        : ${state.local.displayName} [${state.local.fingerprint}]`);
+      console.log(`[P2Pod Web] Home        : ${state.local.homeDir}`);
+      console.log(`[P2Pod Web] Discovery   : ${state.local.discoveryUrl}`);
+      console.log(`[P2Pod Web] TCP Listen  : port ${state.local.boundPort}`);
+      console.log(
+        `[P2Pod Web] Public      : ${state.local.publicEndpoint ?? '(otomatis via Discovery / atur di UI Network)'}`
+      );
+      console.log(`[P2Pod Web] Solid Pod   : ${state.pod.enabled ? state.pod.podUrl : '(nonaktif)'}`);
+    } else {
+      console.log(`[P2Pod Web] Home        : ${homeDir}`);
+      console.log('[P2Pod Web] User        : belum ada profil — buka browser untuk setup pertama kali.');
+    }
+    if (needsSetup) {
+      console.log('[P2Pod Web] Setup mode  : buat profil pertama melalui Web UI.');
+    }
+    console.log(`[P2Pod Web] Bridge URL  : ${url} (UI lokal)`);
     console.log(`[P2Pod Web] WebSocket   : ws://127.0.0.1:${bridge.uiPort}/ws`);
     if (hasStaticBuild) {
       console.log(`[P2Pod Web] Frontend    : disajikan langsung di ${url}`);
@@ -530,7 +605,7 @@ async function main(): Promise<void> {
     const config = loadConfig(homeDir);
     if (!config) {
       throw new Error(
-        `Profil di ${homeDir} belum selesai setup. Selesaikan: npm run role:user -- --home ${homeDir}`
+        `Profil di ${homeDir} belum selesai setup. Buat profil: npm run user:add (atau buka Web UI).`
       );
     }
     const identity = Identity.loadOrCreate(homeDir, opts.displayName ?? config.displayName);
@@ -538,7 +613,16 @@ async function main(): Promise<void> {
     const listenPort = opts.port ?? config.listenPort;
     validatePort(listenPort, 'Port TCP');
     const podUrl = resolvePodUrl(opts, config, identity.displayName);
-    await startApp({ identity, homeDir, discoveryUrl, listenPort, podUrl });
+    await startApp({
+      identity,
+      homeDir,
+      discoveryUrl,
+      listenPort,
+      podUrl,
+      publicHost: opts.publicHost ?? config.network?.publicHost,
+      publicPort: opts.publicPort ?? config.network?.publicPort,
+      discoveryToken: opts.discoveryToken ?? config.network?.discoveryToken,
+    });
     return;
   }
 
@@ -562,7 +646,7 @@ async function main(): Promise<void> {
     if (!opts.connectTarget) {
       throw new Error('Perintah connect membutuhkan target: connect <nama|PeerID> (atau --connect <target>).');
     }
-    if (opts.peerIp && !isValidIpv4(opts.peerIp)) {
+    if (opts.peerIp && !isValidHost(opts.peerIp)) {
       throw new Error(`--peer-ip tidak valid: ${opts.peerIp}`);
     }
     const resolved = await resolveTarget(opts.connectTarget, discoveryUrl);
@@ -575,6 +659,9 @@ async function main(): Promise<void> {
       discoveryUrl,
       listenPort,
       podUrl,
+      publicHost: opts.publicHost ?? config?.network?.publicHost,
+      publicPort: opts.publicPort ?? config?.network?.publicPort,
+      discoveryToken: opts.discoveryToken ?? config?.network?.discoveryToken,
       targetPeerId: resolved.peerId,
       targetIp: opts.peerIp,
       targetPort: opts.peerPort,
@@ -583,7 +670,16 @@ async function main(): Promise<void> {
   }
 
   // listen
-  await startApp({ identity, homeDir, discoveryUrl, listenPort, podUrl });
+  await startApp({
+    identity,
+    homeDir,
+    discoveryUrl,
+    listenPort,
+    podUrl,
+    publicHost: opts.publicHost ?? config?.network?.publicHost,
+    publicPort: opts.publicPort ?? config?.network?.publicPort,
+    discoveryToken: opts.discoveryToken ?? config?.network?.discoveryToken,
+  });
 }
 
 main()

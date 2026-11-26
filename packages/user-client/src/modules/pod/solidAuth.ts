@@ -103,8 +103,8 @@ export function normalizeIssuerUrl(raw: string): string {
 /**
  * Turunkan root URL Solid Pod dari WebID bila discovery profile gagal/kosong.
  * Contoh:
- *   https://alice.solidcommunity.net/profile/card#me -> https://alice.solidcommunity.net/
- *   http://localhost:3005/alice/profile/card#me      -> http://localhost:3005/alice/
+ *   https://rina.solidcommunity.net/profile/card#me -> https://rina.solidcommunity.net/
+ *   http://localhost:3005/rina/profile/card#me      -> http://localhost:3005/rina/
  */
 export function derivePodUrlFromWebId(webId: string): string {
   try {

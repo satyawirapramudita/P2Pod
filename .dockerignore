@@ -1,0 +1,13 @@
+node_modules
+dist
+.git
+.gitignore
+.css
+.p2pod
+docs
+*.log
+.env
+.env.*
+Laporan_Progress.md
+DEMO.md
+Guide_Screenshot.md

@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
+import { CrtWindowFrame, StatusBanner } from './components/ui/Primitives';
 import { useBridgeClient } from './hooks/useBridgeClient';
 import { ConsolePage } from './pages/ConsolePage';
+import { SetupPage } from './pages/SetupPage';
 import { StyleguidePage } from './pages/StyleguidePage';
 
 type RouteView = 'console' | 'styleguide';
@@ -41,5 +43,22 @@ export function App(): React.ReactElement {
     return <StyleguidePage onNavigateConsole={() => navigate('console')} />;
   }
 
-  return <ConsolePage bridge={bridge} onNavigateStyleguide={() => navigate('styleguide')} />;
+  if (bridge.loadingInitial && !bridge.state) {
+    return (
+      <main className="console-shell">
+        <CrtWindowFrame title="BOOT // P2POD LOCAL BRIDGE">
+          <StatusBanner
+            title="Menghubungkan ke Daemon Lokal..."
+            description="Membuka saluran WebSocket ke P2Pod WebBridge di 127.0.0.1."
+          />
+        </CrtWindowFrame>
+      </main>
+    );
+  }
+
+  if (!bridge.state) {
+    return <SetupPage bridge={bridge} />;
+  }
+
+  return <ConsolePage bridge={bridge} />;
 }

@@ -4,7 +4,8 @@
 
 import { createPrompter } from './prompt';
 import { Identity, ensureDir } from './identity/identity';
-import { loadConfig, saveConfig, PodSettings, UserConfig } from './config';
+import { isValidHost } from './discovery/discoveryClient';
+import { loadConfig, NetworkSettings, saveConfig, PodSettings, UserConfig } from './config';
 import {
   generatePassword,
   localCssPortOf,
@@ -21,6 +22,9 @@ export interface WizardOptions {
   listenPort?: number;
   podUrl?: string;
   podDisabled?: boolean;
+  publicHost?: string;
+  publicPort?: number;
+  discoveryToken?: string;
   reconfigure?: boolean;
 }
 
@@ -32,6 +36,25 @@ export interface WizardResult {
 export function normalizeUrl(raw: string): string {
   const trimmed = raw.trim().replace(/\/+$/, '');
   return /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
+}
+
+export function buildNetworkSettings(
+  opts: { publicHost?: string; publicPort?: number; discoveryToken?: string },
+  existing?: NetworkSettings
+): NetworkSettings | undefined {
+  const publicHost = opts.publicHost?.trim() || existing?.publicHost;
+  const publicPort = opts.publicPort ?? existing?.publicPort;
+  const discoveryToken = opts.discoveryToken?.trim() || existing?.discoveryToken;
+
+  if (publicHost && !isValidHost(publicHost)) {
+    throw new Error(`Public host tidak valid: ${publicHost}`);
+  }
+  if (publicPort !== undefined && (!Number.isInteger(publicPort) || publicPort <= 0 || publicPort > 65535)) {
+    throw new Error(`Public port tidak valid (1-65535): ${publicPort}`);
+  }
+
+  if (!publicHost && !publicPort && !discoveryToken) return undefined;
+  return { publicHost, publicPort, discoveryToken };
 }
 
 export async function checkDiscovery(url: string): Promise<string | null> {
@@ -83,13 +106,13 @@ export async function runWizard(opts: WizardOptions): Promise<WizardResult> {
 
       console.log(`  Discovery Platform tidak OK: ${problem}`);
       console.log('  Petunjuk:');
-      console.log('   - Pastikan host menjalankan `npm run role:discovery` dan sudah mengizinkan port di firewall-nya.');
+      console.log('   - Pastikan host menjalankan `npm run discovery` dan sudah mengizinkan port di firewall-nya.');
       console.log('   - Gunakan IP LAN host (bukan localhost) bila discovery berada di device lain — lihat banner host.');
       console.log('   - Pastikan satu jaringan: `ping <IP_HOST>` dan SSID yang sama.');
       if (opts.discoveryUrl || !interactive) {
         throw new Error(
           `URL Discovery Platform (${discoveryUrl}) tidak bisa dipakai: ${problem}. ` +
-            'Pastikan host menjalankan `npm run role:discovery` dan firewall-nya mengizinkan port tersebut.'
+            'Pastikan host menjalankan `npm run discovery` dan firewall-nya mengizinkan port tersebut.'
         );
       }
       const retry = (await prompter.ask('  URL baru (ketik "batal" untuk membatalkan): ')).trim();
@@ -191,12 +214,14 @@ export async function runWizard(opts: WizardOptions): Promise<WizardResult> {
       }
     }
 
+    const network = buildNetworkSettings(opts, existing?.network);
     const now = new Date().toISOString();
     const config: UserConfig = {
       displayName: identity.displayName,
       discoveryUrl,
       listenPort,
       pod,
+      network,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
@@ -208,6 +233,13 @@ export async function runWizard(opts: WizardOptions): Promise<WizardResult> {
     console.log(`  Peer ID   : ${identity.peerId}`);
     console.log(`  Discovery : ${config.discoveryUrl}`);
     console.log(`  Port TCP  : ${config.listenPort}`);
+    console.log(
+      `  Public    : ${
+        config.network?.publicHost
+          ? `${config.network.publicHost}:${config.network.publicPort ?? config.listenPort}`
+          : '(otomatis dari Discovery — atur di Web UI Network / flag --public-host)'
+      }`
+    );
     console.log(
       `  Pod       : ${
         config.pod.enabled ? config.pod.podUrl : '(nonaktif — aktifkan: npm run pod:login)'

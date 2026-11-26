@@ -114,6 +114,19 @@ a:hover {
   min-height: 620px;
 }
 
+.setup-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(260px, 0.85fr);
+  gap: var(--space-md);
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .setup-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .console-pane {
   min-width: 0;
   display: flex;

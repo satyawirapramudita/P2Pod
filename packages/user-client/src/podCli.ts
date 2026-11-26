@@ -199,7 +199,7 @@ export async function runPodLink(opts: { homeDir: string; podUrl?: string; displ
 
   if (!fs.existsSync(podConfigPath)) {
     throw new Error(
-      `Konfigurasi Pod belum ditemukan di ${podConfigPath}. Jalankan dulu: npm run pod:login atau npm run role:user`
+      `Konfigurasi Pod belum ditemukan di ${podConfigPath}. Jalankan dulu: npm run pod:login atau buat profil di Web UI`
     );
   }
 

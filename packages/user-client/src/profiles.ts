@@ -15,7 +15,7 @@ import {
 } from './modules/pod/provision';
 import { SolidClient } from './modules/pod/solidClient';
 import { createPrompter } from './prompt';
-import { checkDiscovery, normalizeUrl } from './wizard';
+import { buildNetworkSettings, checkDiscovery, normalizeUrl } from './wizard';
 import { setActiveProfile } from './activeProfile';
 
 export interface IdentityInfo {
@@ -73,6 +73,13 @@ export function scanProfiles(extraHomes: string[] = []): LocalProfile[] {
     }
   }
 
+  const dataDir = process.env.P2POD_DATA_DIR ? path.resolve(process.env.P2POD_DATA_DIR) : '';
+  if (dataDir && fs.existsSync(dataDir)) {
+    for (const entry of fs.readdirSync(dataDir, { withFileTypes: true })) {
+      if (entry.isDirectory()) add(path.join(dataDir, entry.name));
+    }
+  }
+
   for (const dir of extraHomes) add(dir);
 
   const profiles: LocalProfile[] = [];
@@ -121,6 +128,13 @@ export function formatProfileLines(profiles: LocalProfile[]): string[] {
     lines.push(
       `    discovery  : ${profile.config?.discoveryUrl ?? '-'}   port TCP: ${profile.config?.listenPort ?? '-'}`
     );
+    lines.push(
+      `    network    : ${
+        profile.config?.network?.publicHost
+          ? `${profile.config.network.publicHost}:${profile.config.network.publicPort ?? profile.config.listenPort}`
+          : 'auto (observed by discovery)'
+      }`
+    );
     lines.push(`    pod        : ${podLabel(profile)}`);
     if (webId) {
       lines.push(`    webid      : ${webId}`);
@@ -133,7 +147,7 @@ export function formatProfileLines(profiles: LocalProfile[]): string[] {
 export function runProfiles(homeDirArg?: string): void {
   const profiles = scanProfiles(homeDirArg ? [homeDirArg] : []);
   if (profiles.length === 0) {
-    console.log('Tidak ada user di device ini. Buat dengan: npm run role:user');
+    console.log('Tidak ada user di device ini. Buat dengan: npm run user:add (atau Web UI)');
     return;
   }
   console.log(`User di device ini (${profiles.length}):`);
@@ -187,7 +201,7 @@ export async function runSwitch(opts: SwitchOptions): Promise<void> {
   console.log('');
   console.log(`User aktif sekarang: ${profileName(target)} (${target.homeDir})`);
   if (!target.config) {
-    console.log('⚠ Profil ini belum selesai setup — selesaikan: npm run role:user -- --home ' + target.homeDir);
+    console.log('⚠ Profil ini belum selesai setup — selesaikan: npm run user:add -- --home ' + target.homeDir);
   } else {
     console.log('Mulai: npm run user');
   }
@@ -239,6 +253,9 @@ export interface EditOptions {
   listenPort?: number;
   podUrl?: string;
   podDisabled?: boolean;
+  publicHost?: string;
+  publicPort?: number;
+  discoveryToken?: string;
 }
 
 export async function runEdit(opts: EditOptions): Promise<void> {
@@ -252,7 +269,10 @@ export async function runEdit(opts: EditOptions): Promise<void> {
     opts.discoveryUrl !== undefined ||
     opts.listenPort !== undefined ||
     opts.podUrl !== undefined ||
-    opts.podDisabled === true;
+    opts.podDisabled === true ||
+    opts.publicHost !== undefined ||
+    opts.publicPort !== undefined ||
+    opts.discoveryToken !== undefined;
 
   let newName = opts.name;
   let newDiscovery = opts.discoveryUrl;
@@ -318,11 +338,13 @@ export async function runEdit(opts: EditOptions): Promise<void> {
   }
 
   if (config) {
+    const nextNetwork = buildNetworkSettings(opts, config.network);
     const updated: UserConfig = {
       ...config,
       displayName: newName ?? config.displayName,
       discoveryUrl: newDiscovery ?? config.discoveryUrl,
       listenPort: newPort ?? config.listenPort,
+      network: nextNetwork,
       updatedAt: new Date().toISOString(),
     };
 
@@ -331,6 +353,19 @@ export async function runEdit(opts: EditOptions): Promise<void> {
     }
     if (newPort !== undefined && newPort !== config.listenPort) {
       changedFields.push(`port TCP: ${config.listenPort} → ${updated.listenPort}`);
+    }
+    if (
+      nextNetwork?.publicHost !== config.network?.publicHost ||
+      nextNetwork?.publicPort !== config.network?.publicPort ||
+      nextNetwork?.discoveryToken !== config.network?.discoveryToken
+    ) {
+      changedFields.push(
+        `network: ${
+          nextNetwork?.publicHost
+            ? `${nextNetwork.publicHost}:${nextNetwork.publicPort ?? updated.listenPort}`
+            : 'auto (observed by discovery)'
+        }${nextNetwork?.discoveryToken ? ' + token' : ''}`
+      );
     }
 
     if (podChange === 'disable') {
@@ -394,7 +429,7 @@ export async function runEdit(opts: EditOptions): Promise<void> {
 
     saveConfig(target.homeDir, updated);
   } else if (podChange === 'enable') {
-    throw new Error('Profil ini belum punya config — selesaikan dulu dengan: npm run role:user -- --home <path>');
+    throw new Error('Profil ini belum punya config — selesaikan dulu dengan: npm run user:add -- --home <path>');
   }
 
   if (changedFields.length === 0) {

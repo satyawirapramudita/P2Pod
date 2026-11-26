@@ -7,9 +7,9 @@ import * as path from 'path';
 import { WebSocketServer, WebSocket } from 'ws';
 import { PeerApp, PeerAppState, PeerChatEvent } from '../core/peerApp';
 import { Identity, fingerprintOf } from '../identity/identity';
-import { loadConfig } from '../config';
+import { loadConfig, saveConfig } from '../config';
 import { setActiveProfile } from '../activeProfile';
-import { profileName, scanProfiles } from '../profiles';
+import { profileName, runRemove, scanProfiles } from '../profiles';
 import { ensureLocalCssRunning, localCssPortOf, podNameFromDisplayName } from '../modules/pod/provision';
 import {
   DEFAULT_SOLID_ISSUER,
@@ -18,6 +18,9 @@ import {
   normalizeIssuerUrl,
 } from '../modules/pod/solidAuth';
 import { linkAndPersistPod } from '../podCli';
+import { createProfile, resolveNewProfileHome, updateProfileSettings } from '../profileSetup';
+import { checkDiscovery, normalizeUrl } from '../wizard';
+import { isValidHost } from '../discovery/discoveryClient';
 
 export interface WebBridgeOptions {
   homeDir: string;
@@ -26,8 +29,13 @@ export interface WebBridgeOptions {
   listenPort?: number;
   podUrl?: string;
   podDisabled?: boolean;
+  publicHost?: string;
+  publicPort?: number;
+  discoveryToken?: string;
   /** Port HTTP/WS lokal (default 3333, fallback otomatis hingga +9 bila terpakai). */
   uiPort?: number;
+  /** Alamat bind HTTP/WS. Default 127.0.0.1; Docker memakai 0.0.0.0 di dalam container. */
+  uiHost?: string;
   /** Direktori hasil build statis frontend (opsional, mis. packages/web-ui/dist). */
   staticDir?: string;
 }
@@ -35,6 +43,29 @@ export interface WebBridgeOptions {
 export interface SystemLogEntry {
   text: string;
   timestamp: number;
+}
+
+export interface ProfileSummary {
+  homeDir: string;
+  name: string;
+  peerId: string;
+  fingerprint: string;
+  discoveryUrl: string | null;
+  listenPort: number | null;
+  publicHost: string | null;
+  publicPort: number | null;
+  pod: { enabled: boolean; podUrl?: string; webId?: string; authMode?: string } | null;
+  isDefault: boolean;
+  isActive: boolean;
+  complete: boolean;
+}
+
+export interface BridgeDefaults {
+  discoveryUrl: string;
+  listenPort: number;
+  publicHost?: string;
+  publicPort?: number;
+  hasDiscoveryToken: boolean;
 }
 
 const MAX_LOG_ENTRIES = 200;
@@ -102,10 +133,7 @@ function readJsonBody(req: http.IncomingMessage): Promise<Record<string, unknown
   });
 }
 
-function listenLocalServer(
-  server: http.Server,
-  preferredPort: number
-): Promise<number> {
+function listenLocalServer(server: http.Server, host: string, preferredPort: number): Promise<number> {
   return new Promise((resolve, reject) => {
     const maxAttempts = preferredPort === 0 ? 1 : 10;
     let attempt = 0;
@@ -121,7 +149,7 @@ function listenLocalServer(
       };
 
       server.once('error', onError);
-      server.listen(port, '127.0.0.1', () => {
+      server.listen(port, host, () => {
         server.removeListener('error', onError);
         const addr = server.address();
         const bound = typeof addr === 'object' && addr ? addr.port : port;
@@ -133,8 +161,41 @@ function listenLocalServer(
   });
 }
 
+async function detectPublicIp(): Promise<string | null> {
+  const sources: Array<{ url: string; parse: (body: string) => string | null }> = [
+    {
+      url: 'https://api.ipify.org?format=json',
+      parse: (body) => {
+        try {
+          const parsed = JSON.parse(body) as { ip?: string };
+          return typeof parsed.ip === 'string' ? parsed.ip.trim() : null;
+        } catch {
+          return null;
+        }
+      },
+    },
+    {
+      url: 'https://ifconfig.me/ip',
+      parse: (body) => body.trim().split(/\s+/)[0] || null,
+    },
+  ];
+
+  for (const source of sources) {
+    try {
+      const response = await fetch(source.url, { signal: AbortSignal.timeout(5000) });
+      if (!response.ok) continue;
+      const ip = source.parse(await response.text());
+      if (ip && isValidHost(ip)) return ip.replace(/^\[|\]$/g, '');
+    } catch {
+      // coba sumber berikutnya
+    }
+  }
+  return null;
+}
+
 export class WebBridge {
   private readonly preferredUiPort: number;
+  private readonly uiHost: string;
   private readonly staticDir?: string;
   private readonly initialOverrides: {
     displayName?: string;
@@ -142,28 +203,38 @@ export class WebBridge {
     listenPort?: number;
     podUrl?: string;
     podDisabled?: boolean;
+    publicHost?: string;
+    publicPort?: number;
+    discoveryToken?: string;
   };
 
   private currentHomeDir: string;
-  private currentIdentity!: Identity;
-  private app!: PeerApp;
+  private currentIdentity: Identity | null = null;
+  private app: PeerApp | null = null;
   private server: http.Server | null = null;
   private wss: WebSocketServer | null = null;
   private boundUiPort: number | null = null;
   private logs: SystemLogEntry[] = [];
   private podLoginInProgress = false;
   private switchingProfile = false;
+  private needsSetup = false;
 
   constructor(options: WebBridgeOptions) {
     this.currentHomeDir = path.resolve(options.homeDir);
-    this.preferredUiPort = options.uiPort ?? 3333;
-    this.staticDir = options.staticDir ? path.resolve(options.staticDir) : undefined;
+    this.preferredUiPort = options.uiPort ?? Number(process.env.P2POD_UI_PORT ?? 3333);
+    this.uiHost = options.uiHost?.trim() || process.env.P2POD_UI_HOST?.trim() || '127.0.0.1';
+    this.staticDir = path.resolve(
+      options.staticDir ?? process.env.P2POD_WEB_DIST ?? path.join(process.cwd(), 'packages', 'web-ui', 'dist')
+    );
     this.initialOverrides = {
       displayName: options.displayName,
       discoveryUrl: options.discoveryUrl,
       listenPort: options.listenPort,
       podUrl: options.podUrl,
       podDisabled: options.podDisabled,
+      publicHost: options.publicHost,
+      publicPort: options.publicPort,
+      discoveryToken: options.discoveryToken,
     };
   }
 
@@ -175,12 +246,25 @@ export class WebBridge {
     return this.boundUiPort !== null ? `http://127.0.0.1:${this.boundUiPort}` : null;
   }
 
-  get peerApp(): PeerApp {
+  get peerApp(): PeerApp | null {
     return this.app;
   }
 
-  async start(): Promise<{ port: number; url: string; state: PeerAppState }> {
-    await this.bootPeerApp(this.currentHomeDir, this.initialOverrides);
+  async start(): Promise<{
+    port: number;
+    url: string;
+    state: PeerAppState | null;
+    needsSetup: boolean;
+  }> {
+    let bootHome = this.currentHomeDir;
+    if (!loadConfig(bootHome)) {
+      const profiles = scanProfiles([bootHome]);
+      const candidate =
+        profiles.find((profile) => Boolean(profile.config) && profile.homeDir === bootHome) ??
+        profiles.find((profile) => Boolean(profile.config));
+      if (candidate) bootHome = candidate.homeDir;
+    }
+    await this.bootPeerApp(bootHome, this.initialOverrides);
 
     const server = http.createServer((req, res) => {
       void this.handleHttpRequest(req, res);
@@ -212,7 +296,7 @@ export class WebBridge {
       this.handleWsConnection(ws);
     });
 
-    const port = await listenLocalServer(server, this.preferredUiPort);
+    const port = await listenLocalServer(server, this.uiHost, this.preferredUiPort);
     this.server = server;
     this.wss = wss;
     this.boundUiPort = port;
@@ -220,7 +304,8 @@ export class WebBridge {
     return {
       port,
       url: `http://127.0.0.1:${port}`,
-      state: this.app.getState(),
+      state: this.app?.getState() ?? null,
+      needsSetup: this.needsSetup,
     };
   }
 
@@ -259,6 +344,54 @@ export class WebBridge {
   // Manajemen PeerApp & Profil
   // ---------------------------------------------------------------------------
 
+  private profileSummaries(): ProfileSummary[] {
+    return scanProfiles([this.currentHomeDir]).map((p) => ({
+      homeDir: p.homeDir,
+      name: profileName(p),
+      peerId: p.identity?.peerId ?? '',
+      fingerprint: p.identity?.peerId ? fingerprintOf(p.identity.peerId) : '',
+      discoveryUrl: p.config?.discoveryUrl ?? null,
+      listenPort: p.config?.listenPort ?? null,
+      publicHost: p.config?.network?.publicHost ?? null,
+      publicPort: p.config?.network?.publicPort ?? null,
+      pod: p.config?.pod
+        ? {
+            enabled: p.config.pod.enabled,
+            podUrl: p.config.pod.podUrl,
+            webId: p.config.pod.webId,
+            authMode: p.config.pod.authMode,
+          }
+        : null,
+      isDefault: p.isDefault,
+      isActive: path.resolve(p.homeDir) === this.currentHomeDir,
+      complete: Boolean(p.config),
+    }));
+  }
+
+  private defaults(): BridgeDefaults {
+    const port = Number(process.env.P2P_LISTEN_PORT ?? 5000);
+    const publicPort = Number(process.env.P2P_PUBLIC_PORT ?? '');
+    return {
+      discoveryUrl: process.env.P2P_DISCOVERY_URL?.trim() || 'http://localhost:4000',
+      listenPort: Number.isInteger(port) && port > 0 ? port : 5000,
+      publicHost: process.env.P2P_PUBLIC_HOST?.trim() || undefined,
+      publicPort: Number.isInteger(publicPort) && publicPort > 0 ? publicPort : undefined,
+      hasDiscoveryToken: Boolean(process.env.P2P_DISCOVERY_TOKEN?.trim()),
+    };
+  }
+
+  private initPayload(): Record<string, unknown> {
+    return {
+      type: 'init',
+      state: this.app?.getState() ?? null,
+      chats: this.app?.listChats() ?? [],
+      logs: this.logs,
+      profiles: this.profileSummaries(),
+      needsSetup: this.needsSetup,
+      defaults: this.defaults(),
+    };
+  }
+
   private async bootPeerApp(
     homeDir: string,
     overrides: {
@@ -267,12 +400,21 @@ export class WebBridge {
       listenPort?: number;
       podUrl?: string;
       podDisabled?: boolean;
+      publicHost?: string;
+      publicPort?: number;
+      discoveryToken?: string;
     } = {}
-  ): Promise<void> {
+  ): Promise<boolean> {
     const resolvedHome = path.resolve(homeDir);
     const config = loadConfig(resolvedHome);
+    this.currentHomeDir = resolvedHome;
+    this.logs = [];
+
     if (!config) {
-      throw new Error(`Profil di ${resolvedHome} belum memiliki config.json.`);
+      this.app = null;
+      this.currentIdentity = null;
+      this.needsSetup = true;
+      return false;
     }
 
     const identity = Identity.loadOrCreate(resolvedHome, overrides.displayName ?? config.displayName);
@@ -290,22 +432,33 @@ export class WebBridge {
       }
     }
 
+    const envPublicHost = process.env.P2P_PUBLIC_HOST?.trim() || undefined;
+    const envPublicPort = Number(process.env.P2P_PUBLIC_PORT ?? '');
+    const envDiscoveryToken = process.env.P2P_DISCOVERY_TOKEN?.trim() || undefined;
+
     const app = new PeerApp({
       identity,
       homeDir: resolvedHome,
       discoveryUrl,
       listenPort,
       podUrl,
+      publicHost: overrides.publicHost ?? config.network?.publicHost ?? envPublicHost,
+      publicPort:
+        overrides.publicPort ??
+        config.network?.publicPort ??
+        (Number.isInteger(envPublicPort) && envPublicPort > 0 ? envPublicPort : undefined),
+      discoveryToken:
+        overrides.discoveryToken ?? config.network?.discoveryToken ?? envDiscoveryToken,
       mode: 'daemon',
     });
 
-    this.currentHomeDir = resolvedHome;
     this.currentIdentity = identity;
     this.app = app;
-    this.logs = [];
+    this.needsSetup = false;
     this.attachAppListeners(app);
 
     await app.startNode();
+    return true;
   }
 
   private attachAppListeners(app: PeerApp): void {
@@ -353,12 +506,16 @@ export class WebBridge {
     });
   }
 
+  private broadcastInit(): void {
+    this.broadcast(this.initPayload());
+  }
+
   private async switchProfile(targetHomeDir: string): Promise<PeerAppState> {
     if (this.switchingProfile) {
       throw new Error('Sedang dalam proses mengganti profil.');
     }
     const resolved = path.resolve(targetHomeDir);
-    if (resolved === this.currentHomeDir) {
+    if (resolved === this.currentHomeDir && this.app) {
       return this.app.getState();
     }
 
@@ -370,20 +527,17 @@ export class WebBridge {
     this.switchingProfile = true;
     const prevHome = this.currentHomeDir;
     try {
-      await this.app.stopNode('Berpindah profil dari Web UI...');
+      if (this.app) {
+        await this.app.stopNode('Berpindah profil dari Web UI...');
+      }
       await this.bootPeerApp(resolved);
-      setActiveProfile(resolved, this.currentIdentity.displayName);
-      const state = this.app.getState();
-      this.broadcast({
-        type: 'init',
-        state,
-        chats: this.app.listChats(),
-        logs: this.logs,
-      });
+      setActiveProfile(resolved, this.currentIdentity?.displayName ?? config.displayName);
+      const state = this.app!.getState();
+      this.broadcastInit();
       return state;
     } catch (err) {
       // Coba pulihkan profil sebelumnya bila gagal start di profil baru
-      if (this.app.getState().nodeStatus === 'stopped') {
+      if (!this.app && loadConfig(prevHome)) {
         await this.bootPeerApp(prevHome).catch(() => undefined);
       }
       throw err;
@@ -397,12 +551,7 @@ export class WebBridge {
   // ---------------------------------------------------------------------------
 
   private handleWsConnection(ws: WebSocket): void {
-    this.sendWs(ws, {
-      type: 'init',
-      state: this.app.getState(),
-      chats: this.app.listChats(),
-      logs: this.logs,
-    });
+    this.sendWs(ws, this.initPayload());
 
     ws.on('message', (raw) => {
       try {
@@ -412,6 +561,10 @@ export class WebBridge {
           return;
         }
         if (parsed.type === 'sendMessage' && typeof parsed.text === 'string') {
+          if (!this.app) {
+            this.sendWs(ws, { type: 'error', error: 'Profil belum aktif. Selesaikan setup terlebih dahulu.' });
+            return;
+          }
           this.app.sendChat(parsed.text);
         }
       } catch (err: any) {
@@ -443,7 +596,7 @@ export class WebBridge {
   private applyCors(req: http.IncomingMessage, res: http.ServerResponse): boolean {
     const origin = req.headers.origin;
     if (!isAllowedLocalOrigin(origin)) {
-      this.sendJson(res, 403, { error: 'Origin tidak diizinkan (hanya localhost).' });
+      this.sendJson(res, 403, { error: 'Origin tidak diizinkan (UI lokal).' });
       return false;
     }
     if (origin) {
@@ -494,6 +647,14 @@ export class WebBridge {
     }
   }
 
+  private requireApp(res: http.ServerResponse): PeerApp | null {
+    if (!this.app) {
+      this.sendJson(res, 409, { error: 'Belum ada profil aktif. Selesaikan setup melalui Web UI.' });
+      return null;
+    }
+    return this.app;
+  }
+
   private async handleApi(
     method: string,
     pathname: string,
@@ -501,32 +662,119 @@ export class WebBridge {
     res: http.ServerResponse
   ): Promise<void> {
     if (method === 'GET' && pathname === '/api/health') {
-      this.sendJson(res, 200, { ok: true, nodeStatus: this.app.getState().nodeStatus });
+      this.sendJson(res, 200, {
+        ok: true,
+        nodeStatus: this.app?.getState().nodeStatus ?? 'stopped',
+        needsSetup: this.needsSetup,
+      });
       return;
     }
 
     if (method === 'GET' && pathname === '/api/state') {
       this.sendJson(res, 200, {
-        state: this.app.getState(),
+        state: this.app?.getState() ?? null,
         logs: this.logs,
+        profiles: this.profileSummaries(),
+        needsSetup: this.needsSetup,
+        defaults: this.defaults(),
       });
       return;
     }
 
     if (method === 'GET' && pathname === '/api/profiles') {
-      const profiles = scanProfiles([this.currentHomeDir]).map((p) => ({
-        homeDir: p.homeDir,
-        name: profileName(p),
-        peerId: p.identity?.peerId ?? '',
-        fingerprint: p.identity?.peerId ? fingerprintOf(p.identity.peerId) : '',
-        discoveryUrl: p.config?.discoveryUrl ?? null,
-        listenPort: p.config?.listenPort ?? null,
-        pod: p.config?.pod ?? null,
-        isDefault: p.isDefault,
-        isActive: path.resolve(p.homeDir) === this.currentHomeDir,
-        complete: Boolean(p.config),
-      }));
-      this.sendJson(res, 200, { activeHomeDir: this.currentHomeDir, profiles });
+      this.sendJson(res, 200, {
+        activeHomeDir: this.currentHomeDir,
+        needsSetup: this.needsSetup,
+        profiles: this.profileSummaries(),
+      });
+      return;
+    }
+
+    if (method === 'POST' && pathname === '/api/profiles/create') {
+      const body = await readJsonBody(req);
+      const displayName = typeof body.displayName === 'string' ? body.displayName.trim() : '';
+      const discoveryUrl = typeof body.discoveryUrl === 'string' ? body.discoveryUrl.trim() : '';
+      if (!displayName) {
+        this.sendJson(res, 400, { error: 'Nama user wajib diisi.' });
+        return;
+      }
+      if (!discoveryUrl) {
+        this.sendJson(res, 400, { error: 'URL Discovery Platform wajib diisi.' });
+        return;
+      }
+
+      const preferredHome = typeof body.homeDir === 'string' ? body.homeDir : undefined;
+      const envListenPort = Number(process.env.P2P_LISTEN_PORT ?? '');
+      const envPublicPort = Number(process.env.P2P_PUBLIC_PORT ?? '');
+      const homeDir = resolveNewProfileHome(displayName, preferredHome);
+      const result = await createProfile({
+        homeDir,
+        displayName,
+        discoveryUrl,
+        listenPort:
+          typeof body.listenPort === 'number'
+            ? body.listenPort
+            : Number.isInteger(envListenPort) && envListenPort > 0
+              ? envListenPort
+              : undefined,
+        podUrl: typeof body.podUrl === 'string' && body.podUrl.trim() ? body.podUrl.trim() : undefined,
+        podDisabled: body.podDisabled === true,
+        publicHost:
+          typeof body.publicHost === 'string' && body.publicHost.trim()
+            ? body.publicHost.trim()
+            : process.env.P2P_PUBLIC_HOST?.trim() || undefined,
+        publicPort:
+          typeof body.publicPort === 'number'
+            ? body.publicPort
+            : Number.isInteger(envPublicPort) && envPublicPort > 0
+              ? envPublicPort
+              : undefined,
+        discoveryToken:
+          typeof body.discoveryToken === 'string' && body.discoveryToken.trim()
+            ? body.discoveryToken.trim()
+            : process.env.P2P_DISCOVERY_TOKEN?.trim() || undefined,
+      });
+      const previousHome = this.currentHomeDir;
+      if (this.app) {
+        await this.app.stopNode('Berpindah ke profil baru...');
+      }
+      try {
+        await this.bootPeerApp(homeDir);
+      } catch (err) {
+        if (loadConfig(previousHome)) {
+          await this.bootPeerApp(previousHome).catch(() => undefined);
+        }
+        throw err;
+      }
+      setActiveProfile(homeDir, result.identity.displayName);
+      if (result.warning) {
+        this.logs.push({ text: `⚠ ${result.warning}`, timestamp: Date.now() });
+        this.broadcast({ type: 'system', text: `⚠ ${result.warning}`, timestamp: Date.now() });
+      }
+      this.broadcastInit();
+      this.sendJson(res, 200, {
+        ok: true,
+        state: this.app?.getState() ?? null,
+        warning: result.warning,
+      });
+      return;
+    }
+
+    if (method === 'POST' && pathname === '/api/profiles/delete') {
+      const body = await readJsonBody(req);
+      if (typeof body.homeDir !== 'string' || !body.homeDir.trim()) {
+        this.sendJson(res, 400, { error: 'Field homeDir wajib diisi.' });
+        return;
+      }
+      const target = path.resolve(body.homeDir);
+      if (target === this.currentHomeDir) {
+        this.sendJson(res, 400, {
+          error: 'Tidak bisa menghapus profil yang sedang aktif. Pindah profil terlebih dahulu.',
+        });
+        return;
+      }
+      await runRemove({ homeDir: target, yes: true });
+      this.sendJson(res, 200, { ok: true, profiles: this.profileSummaries() });
       return;
     }
 
@@ -541,7 +789,88 @@ export class WebBridge {
       return;
     }
 
+    if (method === 'POST' && pathname === '/api/profile/update') {
+      if (!this.app) {
+        this.sendJson(res, 409, { error: 'Belum ada profil aktif.' });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const previousConfig = loadConfig(this.currentHomeDir);
+      const updated = await updateProfileSettings(this.currentHomeDir, {
+        discoveryUrl: typeof body.discoveryUrl === 'string' ? body.discoveryUrl : undefined,
+        listenPort: typeof body.listenPort === 'number' ? body.listenPort : undefined,
+        publicHost:
+          body.publicHost === null
+            ? null
+            : typeof body.publicHost === 'string'
+              ? body.publicHost
+              : undefined,
+        publicPort:
+          body.publicPort === null
+            ? null
+            : typeof body.publicPort === 'number'
+              ? body.publicPort
+              : undefined,
+        discoveryToken:
+          body.discoveryToken === null
+            ? null
+            : typeof body.discoveryToken === 'string' && body.discoveryToken.trim()
+              ? body.discoveryToken.trim()
+              : undefined,
+      });
+      await this.app.stopNode('Menerapkan pengaturan jaringan...');
+      try {
+        await this.bootPeerApp(this.currentHomeDir);
+      } catch (err) {
+        if (previousConfig) {
+          saveConfig(this.currentHomeDir, previousConfig);
+          await this.bootPeerApp(this.currentHomeDir).catch(() => undefined);
+        }
+        throw err;
+      }
+      this.broadcastInit();
+      this.sendJson(res, 200, { ok: true, config: updated, state: this.app?.getState() ?? null });
+      return;
+    }
+
+    if (method === 'POST' && pathname === '/api/discovery/check') {
+      const body = await readJsonBody(req);
+      if (typeof body.url !== 'string' || !body.url.trim()) {
+        this.sendJson(res, 400, { error: 'URL discovery wajib diisi.' });
+        return;
+      }
+      const url = normalizeUrl(body.url);
+      const problem = await checkDiscovery(url);
+      this.sendJson(res, 200, { url, ok: !problem, error: problem ?? undefined });
+      return;
+    }
+
+    if (method === 'GET' && pathname === '/api/network/public-ip') {
+      const ip = await detectPublicIp();
+      if (!ip) {
+        this.sendJson(res, 200, {
+          ok: false,
+          error: 'Tidak bisa mendeteksi IP publik. Isi public host secara manual.',
+        });
+        return;
+      }
+      this.sendJson(res, 200, { ok: true, ip });
+      return;
+    }
+
+    if (method === 'POST' && pathname === '/api/network/probe') {
+      const app = this.requireApp(res);
+      if (!app) return;
+      const result = await app.probePublicEndpoint();
+      this.sendJson(res, 200, { ok: true, result });
+      return;
+    }
+
     if (method === 'GET' && pathname === '/api/peers') {
+      if (!this.app) {
+        this.sendJson(res, 200, { peers: [] });
+        return;
+      }
       const peers = await this.app.getOnlinePeers();
       const enriched = peers.map((peer) => ({
         ...peer,
@@ -552,12 +881,16 @@ export class WebBridge {
     }
 
     if (method === 'GET' && pathname === '/api/chats') {
-      this.sendJson(res, 200, { chats: this.app.listChats() });
+      this.sendJson(res, 200, { chats: this.app?.listChats() ?? [] });
       return;
     }
 
     const chatMsgMatch = pathname.match(/^\/api\/chats\/([^/]+)\/messages$/);
     if (method === 'GET' && chatMsgMatch) {
+      if (!this.app) {
+        this.sendJson(res, 200, { chatId: decodeURIComponent(chatMsgMatch[1]), messages: [], stats: { totalMessages: 0, unsyncedSessions: 0 } });
+        return;
+      }
       const chatId = decodeURIComponent(chatMsgMatch[1]);
       const messages = this.app.getChatMessages(chatId);
       const stats = this.app.getChatStats(chatId);
@@ -566,68 +899,89 @@ export class WebBridge {
     }
 
     if (method === 'POST' && pathname === '/api/session/connect') {
+      const app = this.requireApp(res);
+      if (!app) return;
       const body = await readJsonBody(req);
       if (typeof body.peerId !== 'string' || !body.peerId.trim()) {
         this.sendJson(res, 400, { error: 'Field peerId wajib diisi.' });
         return;
       }
-      await this.app.connectTo({
+      await app.connectTo({
         peerId: body.peerId.trim(),
         label: typeof body.label === 'string' ? body.label : undefined,
-        ip: typeof body.ip === 'string' && body.ip.trim() ? body.ip.trim() : undefined,
+        ip:
+          typeof body.ip === 'string' && body.ip.trim()
+            ? body.ip.trim()
+            : typeof body.host === 'string' && body.host.trim()
+              ? body.host.trim()
+              : undefined,
         port: typeof body.port === 'number' ? body.port : undefined,
       });
-      this.sendJson(res, 200, { ok: true, state: this.app.getState() });
+      this.sendJson(res, 200, { ok: true, state: app.getState() });
       return;
     }
 
     if (method === 'POST' && pathname === '/api/session/cancel') {
-      this.app.cancelConnect();
-      this.sendJson(res, 200, { ok: true, state: this.app.getState() });
+      const app = this.requireApp(res);
+      if (!app) return;
+      app.cancelConnect();
+      this.sendJson(res, 200, { ok: true, state: app.getState() });
       return;
     }
 
     if (method === 'POST' && pathname === '/api/session/disconnect') {
+      const app = this.requireApp(res);
+      if (!app) return;
       const body = await readJsonBody(req);
       const reason = typeof body.reason === 'string' && body.reason.trim()
         ? body.reason.trim()
         : 'Sesi diputus dari Web UI.';
-      await this.app.disconnectSession(reason);
-      this.sendJson(res, 200, { ok: true, state: this.app.getState() });
+      await app.disconnectSession(reason);
+      this.sendJson(res, 200, { ok: true, state: app.getState() });
       return;
     }
 
     if (method === 'POST' && pathname === '/api/session/message') {
+      const app = this.requireApp(res);
+      if (!app) return;
       const body = await readJsonBody(req);
       if (typeof body.text !== 'string' || !body.text.trim()) {
         this.sendJson(res, 400, { error: 'Pesan tidak boleh kosong.' });
         return;
       }
-      const message = this.app.sendChat(body.text);
+      const message = app.sendChat(body.text);
       this.sendJson(res, 200, { ok: true, message });
       return;
     }
 
     if (method === 'POST' && pathname === '/api/sync') {
+      const app = this.requireApp(res);
+      if (!app) return;
       const body = await readJsonBody(req);
       if (body.all === true || typeof body.chatId !== 'string' || !body.chatId.trim()) {
-        const result = await this.app.syncAllChats();
-        this.sendJson(res, 200, { ok: true, result, chats: this.app.listChats() });
+        const result = await app.syncAllChats();
+        this.sendJson(res, 200, { ok: true, result, chats: app.listChats() });
       } else {
-        const result = await this.app.syncChat(body.chatId.trim());
-        this.sendJson(res, 200, { ok: true, result, chats: this.app.listChats() });
+        const result = await app.syncChat(body.chatId.trim());
+        this.sendJson(res, 200, { ok: true, result, chats: app.listChats() });
       }
       return;
     }
 
     if (method === 'POST' && pathname === '/api/pod/login') {
+      if (!this.app || !this.currentIdentity) {
+        this.sendJson(res, 409, { error: 'Belum ada profil aktif.' });
+        return;
+      }
       const body = await readJsonBody(req);
       await this.handlePodLoginApi(body, res);
       return;
     }
 
     if (method === 'POST' && pathname === '/api/pod/link') {
-      const state = this.app.getState();
+      const app = this.requireApp(res);
+      if (!app || !this.currentIdentity) return;
+      const state = app.getState();
       if (!state.pod.podUrl) {
         this.sendJson(res, 400, { error: 'Profil belum memiliki URL Solid Pod. Login terlebih dahulu.' });
         return;
@@ -639,8 +993,8 @@ export class WebBridge {
         webId: state.pod.webId,
         authMode: state.pod.authMode,
       });
-      await this.app.reloadPod(state.pod.podUrl);
-      this.sendJson(res, 200, { ok: true, linked, state: this.app.getState() });
+      await app.reloadPod(state.pod.podUrl);
+      this.sendJson(res, 200, { ok: true, linked, state: app.getState() });
       return;
     }
 
@@ -650,6 +1004,10 @@ export class WebBridge {
   private async handlePodLoginApi(body: Record<string, unknown>, res: http.ServerResponse): Promise<void> {
     if (this.podLoginInProgress) {
       this.sendJson(res, 409, { error: 'Proses login Solid Pod sedang berjalan.' });
+      return;
+    }
+    if (!this.currentIdentity) {
+      this.sendJson(res, 409, { error: 'Belum ada profil aktif.' });
       return;
     }
 
@@ -683,9 +1041,9 @@ export class WebBridge {
           email: body.email,
           password: body.password,
         });
-        await this.app.reloadPod(result.podUrl);
+        await this.app!.reloadPod(result.podUrl);
         this.broadcast({ type: 'podLoginStatus', status: 'completed', webId: linked.webId, podUrl: result.podUrl });
-        this.sendJson(res, 200, { ok: true, linked, state: this.app.getState() });
+        this.sendJson(res, 200, { ok: true, linked, state: this.app!.getState() });
       } finally {
         this.podLoginInProgress = false;
       }
@@ -715,13 +1073,13 @@ export class WebBridge {
           this.broadcast({ type: 'podLoginStatus', status: 'linking', webId: result.webId, podUrl: result.podUrl });
           const linked = await linkAndPersistPod({
             homeDir: this.currentHomeDir,
-            identity: this.currentIdentity,
+            identity: this.currentIdentity!,
             podUrl: result.podUrl,
             webId: result.webId,
             oidcIssuer: result.oidcIssuer,
             authMode: result.authMode,
           });
-          await this.app.reloadPod(result.podUrl);
+          await this.app!.reloadPod(result.podUrl);
           this.broadcast({
             type: 'podLoginStatus',
             status: 'completed',

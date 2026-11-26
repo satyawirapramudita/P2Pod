@@ -77,7 +77,7 @@ function printUsage(): void {
   console.log('Usage: npm run setup:pod -- --css <url> --email <email> --password <password> --pod <pod-name> [--home <dir>]');
   console.log('       Flag juga menerima bentuk --flag=value, mis. --css=http://localhost:3000/');
   console.log('       Alternatif tanpa separator: npx ts-node scripts/setup-pod-account.ts --css <url> ...');
-  console.log('Contoh: npm run setup:pod -- --css http://localhost:3000/ --email alice@example.com --password p2pod-demo-123 --pod alice --home .p2pod/alice');
+  console.log('Contoh: npm run setup:pod -- --css http://localhost:3000/ --email rina@example.com --password p2pod-demo-123 --pod rina --home .p2pod/rina');
 }
 
 async function main(): Promise<void> {

@@ -20,6 +20,10 @@ export interface PeerAppState {
     listenPort: number;
     boundPort: number | null;
     localIp: string;
+    publicHost?: string;
+    publicPort?: number;
+    publicEndpoint?: string;
+    observedIp?: string;
   };
   pod: {
     enabled: boolean;
@@ -45,6 +49,8 @@ export interface OnlinePeerItem {
   displayName?: string;
   webId?: string;
   lastSeen?: number;
+  publicEndpoint?: string;
+  reachable?: boolean;
 }
 
 export interface ChatSummary {
@@ -82,6 +88,8 @@ export interface ProfileSummary {
   fingerprint: string;
   discoveryUrl: string | null;
   listenPort: number | null;
+  publicHost: string | null;
+  publicPort: number | null;
   pod: {
     enabled: boolean;
     podUrl?: string;
@@ -91,6 +99,22 @@ export interface ProfileSummary {
   isDefault: boolean;
   isActive: boolean;
   complete: boolean;
+}
+
+export interface BridgeDefaults {
+  discoveryUrl: string;
+  listenPort: number;
+  publicHost?: string;
+  publicPort?: number;
+  hasDiscoveryToken: boolean;
+}
+
+export interface ProbeResult {
+  reachable: boolean;
+  host: string;
+  port: number;
+  checkedAt: number;
+  error?: string;
 }
 
 export interface PodLoginProgress {
