@@ -20,7 +20,7 @@ import {
 import { linkAndPersistPod } from '../podCli';
 import { createProfile, resolveNewProfileHome, updateProfileSettings } from '../profileSetup';
 import { checkDiscovery, normalizeUrl } from '../wizard';
-import { isValidHost } from '../discovery/discoveryClient';
+import { isValidHost, normalizePublicHost } from '../discovery/discoveryClient';
 
 export interface WebBridgeOptions {
   homeDir: string;
@@ -418,8 +418,28 @@ export class WebBridge {
     }
 
     const identity = Identity.loadOrCreate(resolvedHome, overrides.displayName ?? config.displayName);
-    const discoveryUrl = overrides.discoveryUrl ?? config.discoveryUrl;
-    const listenPort = overrides.listenPort ?? config.listenPort;
+
+    // Environment overrides win over the saved profile so container/compose settings
+    // (P2P_DISCOVERY_URL, P2P_PUBLIC_HOST, P2P_LISTEN_PORT, ...) can retarget an
+    // existing profile. Precedence: explicit override > env > saved config.
+    const envDiscoveryUrl = process.env.P2P_DISCOVERY_URL?.trim() || undefined;
+    const envListenPort = Number(process.env.P2P_LISTEN_PORT ?? '');
+    const rawEnvPublicHost = process.env.P2P_PUBLIC_HOST?.trim();
+    const envPublicHost = normalizePublicHost(rawEnvPublicHost);
+    if (rawEnvPublicHost && !envPublicHost) {
+      console.warn(
+        `[P2Pod] P2P_PUBLIC_HOST tidak valid ("${rawEnvPublicHost}") — diabaikan. ` +
+          'Gunakan IP atau hostname tanpa skema (mis. 192.168.1.10), bukan URL discovery.'
+      );
+    }
+    const envPublicPort = Number(process.env.P2P_PUBLIC_PORT ?? '');
+    const envDiscoveryToken = process.env.P2P_DISCOVERY_TOKEN?.trim() || undefined;
+
+    const discoveryUrl = overrides.discoveryUrl ?? envDiscoveryUrl ?? config.discoveryUrl;
+    const listenPort =
+      overrides.listenPort ??
+      (Number.isInteger(envListenPort) && envListenPort > 0 ? envListenPort : undefined) ??
+      config.listenPort;
     const podUrl = overrides.podDisabled
       ? undefined
       : (overrides.podUrl ?? (config.pod.enabled ? config.pod.podUrl : undefined));
@@ -432,23 +452,22 @@ export class WebBridge {
       }
     }
 
-    const envPublicHost = process.env.P2P_PUBLIC_HOST?.trim() || undefined;
-    const envPublicPort = Number(process.env.P2P_PUBLIC_PORT ?? '');
-    const envDiscoveryToken = process.env.P2P_DISCOVERY_TOKEN?.trim() || undefined;
-
     const app = new PeerApp({
       identity,
       homeDir: resolvedHome,
       discoveryUrl,
       listenPort,
       podUrl,
-      publicHost: overrides.publicHost ?? config.network?.publicHost ?? envPublicHost,
+      publicHost:
+        normalizePublicHost(overrides.publicHost) ??
+        envPublicHost ??
+        normalizePublicHost(config.network?.publicHost),
       publicPort:
         overrides.publicPort ??
-        config.network?.publicPort ??
-        (Number.isInteger(envPublicPort) && envPublicPort > 0 ? envPublicPort : undefined),
+        (Number.isInteger(envPublicPort) && envPublicPort > 0 ? envPublicPort : undefined) ??
+        config.network?.publicPort,
       discoveryToken:
-        overrides.discoveryToken ?? config.network?.discoveryToken ?? envDiscoveryToken,
+        overrides.discoveryToken ?? envDiscoveryToken ?? config.network?.discoveryToken,
       mode: 'daemon',
     });
 

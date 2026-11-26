@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { PeerApp } from './core/peerApp';
 import { Identity, defaultHomeDir, ensureDir, fingerprintOf } from './identity/identity';
-import { DiscoveryClient, detectLocalIp, isValidHost } from './discovery/discoveryClient';
+import { DiscoveryClient, detectLocalIp, isValidHost, normalizePublicHost } from './discovery/discoveryClient';
 import { loadConfig, UserConfig } from './config';
 import { runWizard } from './wizard';
 import { resolveTarget } from './targetResolver';
@@ -335,6 +335,9 @@ async function startApp(params: StartParams): Promise<void> {
   console.log(`[P2Pod] IP LAN      : ${localIp || '(tidak terdeteksi)'}`);
   console.log(`[P2Pod] home        : ${params.homeDir}`);
   console.log(`[P2Pod] discovery   : ${params.discoveryUrl}`);
+  console.log(
+    '[P2Pod] PENTING     : semua peer harus memakai URL discovery yang SAMA agar bisa saling menemukan.'
+  );
   console.log(`[P2Pod] port TCP    : ${params.listenPort}`);
   console.log(
     `[P2Pod] endpoint    : ${
@@ -552,6 +555,9 @@ async function main(): Promise<void> {
       console.log(`[P2Pod Web] User        : ${state.local.displayName} [${state.local.fingerprint}]`);
       console.log(`[P2Pod Web] Home        : ${state.local.homeDir}`);
       console.log(`[P2Pod Web] Discovery   : ${state.local.discoveryUrl}`);
+      console.log(
+        '[P2Pod Web] Catatan     : semua peer harus memakai URL discovery yang SAMA agar saling menemukan.'
+      );
       console.log(`[P2Pod Web] TCP Listen  : port ${state.local.boundPort}`);
       console.log(
         `[P2Pod Web] Public      : ${state.local.publicEndpoint ?? '(otomatis via Discovery / atur di UI Network)'}`
@@ -609,8 +615,17 @@ async function main(): Promise<void> {
       );
     }
     const identity = Identity.loadOrCreate(homeDir, opts.displayName ?? config.displayName);
-    const discoveryUrl = opts.discoveryUrl ?? config.discoveryUrl;
-    const listenPort = opts.port ?? config.listenPort;
+    // Environment overrides win over the saved profile (see webBridge.ts).
+    const envDiscoveryUrl = process.env.P2P_DISCOVERY_URL?.trim() || undefined;
+    const envListenPort = Number(process.env.P2P_LISTEN_PORT ?? '');
+    const envPublicHost = normalizePublicHost(process.env.P2P_PUBLIC_HOST);
+    const envPublicPort = Number(process.env.P2P_PUBLIC_PORT ?? '');
+    const envDiscoveryToken = process.env.P2P_DISCOVERY_TOKEN?.trim() || undefined;
+    const discoveryUrl = opts.discoveryUrl ?? envDiscoveryUrl ?? config.discoveryUrl;
+    const listenPort =
+      opts.port ??
+      (Number.isInteger(envListenPort) && envListenPort > 0 ? envListenPort : undefined) ??
+      config.listenPort;
     validatePort(listenPort, 'Port TCP');
     const podUrl = resolvePodUrl(opts, config, identity.displayName);
     await startApp({
@@ -619,9 +634,12 @@ async function main(): Promise<void> {
       discoveryUrl,
       listenPort,
       podUrl,
-      publicHost: opts.publicHost ?? config.network?.publicHost,
-      publicPort: opts.publicPort ?? config.network?.publicPort,
-      discoveryToken: opts.discoveryToken ?? config.network?.discoveryToken,
+      publicHost: opts.publicHost ?? envPublicHost ?? normalizePublicHost(config.network?.publicHost),
+      publicPort:
+        opts.publicPort ??
+        (Number.isInteger(envPublicPort) && envPublicPort > 0 ? envPublicPort : undefined) ??
+        config.network?.publicPort,
+      discoveryToken: opts.discoveryToken ?? envDiscoveryToken ?? config.network?.discoveryToken,
     });
     return;
   }

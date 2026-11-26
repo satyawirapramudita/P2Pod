@@ -32,7 +32,8 @@
     "pod:login": "ts-node packages/user-client/src/main.ts pod-login",
     "pod:link": "ts-node packages/user-client/src/main.ts pod-link",
     "pod:stop": "ts-node scripts/pod-stop.ts",
-    "setup:pod": "ts-node scripts/setup-pod-account.ts"
+    "setup:pod": "ts-node scripts/setup-pod-account.ts",
+    "test:e2e": "node scripts/e2e-connectivity.cjs"
   },
   "devDependencies": {
     "@solid/community-server": "^7.3.0",

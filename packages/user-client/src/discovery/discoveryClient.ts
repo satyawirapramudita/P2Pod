@@ -30,6 +30,18 @@ export function isValidHost(host: string): boolean {
   );
 }
 
+/**
+ * Validate a public host value (from env/config/flag) and return it without
+ * brackets, or `undefined` when it is empty or malformed (e.g. a full URL like
+ * `http://host:4000` mistakenly placed in PUBLIC_HOST). Never advertise an
+ * invalid host to the Discovery Platform.
+ */
+export function normalizePublicHost(value: string | undefined | null): string | undefined {
+  const raw = value?.trim().replace(/^\[|\]$/g, '');
+  if (!raw) return undefined;
+  return isValidHost(raw) ? raw : undefined;
+}
+
 export function isPrivateIp(ip: string): boolean {
   if (!ip) return true;
   if (ip === 'localhost' || ip === '::1' || ip === '[::1]') return true;

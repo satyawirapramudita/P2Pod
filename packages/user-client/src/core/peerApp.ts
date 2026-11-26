@@ -1,6 +1,7 @@
 // packages/user-client/src/core/peerApp.ts
 
 import { EventEmitter } from 'events';
+import * as fs from 'fs';
 import { TcpConnectionManager, ManagedConnection } from '../net/tcpConnection';
 import { CryptoEngine } from '../crypto/cryptoEngine';
 import { TerminalUI } from '../ui/terminalUI';
@@ -13,7 +14,7 @@ import type {
   ProbeResponse,
 } from '@p2pod/shared';
 import { Identity, fingerprintOf, verifyWithPeerId } from '../identity/identity';
-import { DiscoveryClient, detectLocalIp, isPrivateIp, isValidHost } from '../discovery/discoveryClient';
+import { DiscoveryClient, detectLocalIp, isPrivateIp, isValidHost, normalizePublicHost } from '../discovery/discoveryClient';
 import { ChatSessionMeta, HistoryEntry, SolidClient, StoredMessage } from '../modules/pod/solidClient';
 import { looksLikePeerId, pickPeerBySpec } from '../targetResolver';
 import { ChatSummary, LocalStorage } from '../modules/storage/localStorage';
@@ -99,6 +100,16 @@ function delay(ms: number): Promise<void> {
   });
 }
 
+/** True when the process is running inside a container (Docker/Podman). */
+function isRunningInContainer(): boolean {
+  if (process.env.P2POD_IN_CONTAINER === '1') return true;
+  try {
+    return process.platform !== 'win32' && fs.existsSync('/.dockerenv');
+  } catch {
+    return false;
+  }
+}
+
 type ConnectAttemptResult = 'connected' | 'retry' | 'wait';
 
 export class PeerApp extends EventEmitter {
@@ -154,7 +165,7 @@ export class PeerApp extends EventEmitter {
     this.discoveryUrl = options.discoveryUrl;
     this.mode = options.mode ?? 'cli';
     this.listenPort = options.listenPort;
-    this.publicHost = options.publicHost?.trim().replace(/^\[|\]$/g, '') || undefined;
+    this.publicHost = normalizePublicHost(options.publicHost);
     this.publicPort = options.publicPort;
     this.targetPeerId = options.targetPeerId ?? null;
     this.targetIp = options.targetIp ?? null;
@@ -291,6 +302,24 @@ export class PeerApp extends EventEmitter {
   }
 
   /**
+   * Warn when the endpoint advertised to Discovery is unreachable from other
+   * machines — the classic Docker case where the app reports its container IP
+   * (e.g. 172.22.0.3) instead of the host's LAN/public address.
+   */
+  private warnIfEndpointUnreachable(): void {
+    if (this.publicHost) return;
+    const observed = this.discovery.observed;
+    if (!observed || !observed.ip) return;
+    if (!isPrivateIp(observed.ip)) return;
+    if (!isRunningInContainer()) return;
+    this.emitSystem(
+      `⚠ Endpoint yang diiklankan (${observed.ip}:${observed.port}) adalah alamat di dalam container Docker — ` +
+        'peer di perangkat lain tidak akan bisa menjangkaunya. Set P2P_PUBLIC_HOST (atau --public-host) ke IP host ' +
+        'yang dapat dijangkau: IP LAN untuk satu jaringan, atau IP publik/DNS untuk lintas jaringan.'
+    );
+  }
+
+  /**
    * Nyalakan node P2P (TCP listener, registrasi Discovery, cek Solid Pod).
    * Bisa dipakai langsung oleh mode daemon (WebBridge) maupun oleh `start()` CLI.
    */
@@ -309,6 +338,7 @@ export class PeerApp extends EventEmitter {
     try {
       await this.discovery.register(this.identity.peerId, boundPort, registerOpts);
       this.emitSystem('Terdaftar di Discovery Platform.');
+      this.warnIfEndpointUnreachable();
     } catch (err: any) {
       this.emitSystem(`⚠ Discovery Platform belum terjangkau: ${err.message}. Node tetap berjalan dan akan mencoba ulang.`);
     }
